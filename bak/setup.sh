@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ========================================================
-#  MyQuantBot 一键部署脚本 (Debian/Ubuntu) - UTF8 增强版
+#  MyQuantBot 一键部署脚本 (Debian/Ubuntu)
 # ========================================================
 
 # --- 1. 配置区域 (请修改这里) ---
@@ -25,7 +25,7 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-echo ">>> 🚀 开始部署 MyQuantBot (UTF-8 Mode)..."
+echo ">>> 🚀 开始部署 MyQuantBot..."
 
 # --- 2. 系统更新与基础工具安装 ---
 echo ">>> [1/6] 更新系统并安装基础工具..."
@@ -61,7 +61,7 @@ echo ">>> [4/6] 安装依赖包 (这可能需要几分钟)..."
 # --- 6. 配置 Systemd 开机自启服务 ---
 echo ">>> [5/6] 配置系统服务 (Systemd)..."
 
-# 生成服务文件 (注入了 UTF-8 环境变量)
+# 生成服务文件
 cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
 Description=MyQuantBot Trading System
@@ -77,13 +77,6 @@ WorkingDirectory=${APP_DIR}
 
 # 启动命令 (使用虚拟环境中的 Python)
 ExecStart=${APP_DIR}/venv/bin/python ${APP_DIR}/${ENTRY_FILE}
-
-# ==================================================
-# ✅ 核心修复：强制使用 UTF-8 编码，防止中文日志崩溃
-# ==================================================
-Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONIOENCODING=utf-8
-Environment=LANG=C.UTF-8
 
 # 自动重启设置
 Restart=always
@@ -103,10 +96,10 @@ systemctl daemon-reload
 # --- 7. 启动服务 ---
 echo ">>> [6/6] 启动服务并设置开机自启..."
 systemctl enable ${SERVICE_NAME}
-systemctl restart ${SERVICE_NAME}
+systemctl start ${SERVICE_NAME}
 
 echo "========================================================"
-echo "✅ 部署完成！(已集成 UTF-8 修复补丁)"
+echo "✅ 部署完成！"
 echo "--------------------------------------------------------"
 echo "🔍 查看状态: systemctl status ${SERVICE_NAME}"
 echo "📜 查看日志: journalctl -u ${SERVICE_NAME} -f"
