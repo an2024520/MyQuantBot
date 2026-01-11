@@ -2,6 +2,8 @@
 import ccxt
 import time
 import math
+import os                   # 【新增】用于路径检查
+import importlib.util       # 【新增】用于动态加载外部模块
 
 class FutureGridBot:
     def __init__(self, config, logger_func):
@@ -38,15 +40,48 @@ class FutureGridBot:
         try:
             exchange_id = self.config.get('exchange_id', 'binance')
             exchange_class = getattr(ccxt, exchange_id)
+            
+            # 1. 尝试从前端配置读取
+            api_key = self.config.get('api_key', '')
+            secret = self.config.get('secret', '')
+            password = self.config.get('password', '')
+
+            # 2. 【核心修改】从外部绝对路径加载密钥舱
+            # 只有当前端没传 Key 时才触发，路径硬编码为系统级安全目录
+            EXTERNAL_SECRETS_PATH = "/opt/myquant_config/secrets.py"
+            
+            if not api_key:
+                if os.path.exists(EXTERNAL_SECRETS_PATH):
+                    try:
+                        # 动态加载外部 Python 文件
+                        spec = importlib.util.spec_from_file_location("external_secrets", EXTERNAL_SECRETS_PATH)
+                        ext_mod = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(ext_mod)
+                        
+                        keys = getattr(ext_mod, 'HARDCODED_KEYS', {})
+                        
+                        # 仅当交易所 ID 匹配时才加载 (防止 OKX 用了币安的 Key)
+                        if keys.get('exchange_id') == exchange_id:
+                            api_key = keys.get('apiKey', '')
+                            secret = keys.get('secret', '')
+                            password = keys.get('password', '')
+                            self.log(f"[系统] ✅ 已加载外部密钥舱 (/opt/myquant_config/)")
+                    except Exception as e:
+                        self.log(f"[系统] 外部密钥加载失败: {e}")
+                else:
+                    # 文件不存在，可能是本地开发或未配置，保持静默
+                    pass
+
+            # 3. 构造交易所参数
             params = {
-                'apiKey': self.config.get('api_key', ''),
-                'secret': self.config.get('secret', ''),
+                'apiKey': api_key,
+                'secret': secret,
                 'enableRateLimit': True,
                 'options': {'defaultType': 'swap'}, 
                 'timeout': 30000
             }
-            if self.config.get('password'):
-                params['password'] = self.config.get('password')
+            if password:
+                params['password'] = password
 
             self.exchange = exchange_class(params)
             self.exchange.load_markets()
