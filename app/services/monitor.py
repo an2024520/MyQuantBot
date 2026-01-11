@@ -24,13 +24,18 @@ def add_log(msg):
     print(log_entry)
 
 def get_public_exchange():
-    """【新增】根据配置获取交易所实例 (工厂模式)"""
+    # ... (前文代码)
     source = getattr(Config, 'MARKET_SOURCE', 'binance')
+    
+    # 【必须加上这行伪装】
+    user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     
     common_params = {
         'enableRateLimit': True, 
-        'timeout': 30000
+        'timeout': 30000,
+        'userAgent': user_agent  # <--- 注入伪装头
     }
+    
 
     if source == 'coinbase':
         print(f">>> [System] 公共行情源: Coinbase (现货/机构)")
