@@ -1,12 +1,13 @@
 # app/routes/api.py
 from flask import Blueprint, request, jsonify
 import ccxt
+from config import Config  # 【新增】
 from app.services.monitor import SharedState, add_log
 from app.services.bot_manager import BotManager
 
 bp = Blueprint('api', __name__)
 
-# --- 公共行情接口 ---
+# ... (market_status, set_timeframe, check_balance 保持不变) ...
 
 @bp.route('/market_status')
 def market_status():
@@ -24,6 +25,7 @@ def set_timeframe():
 
 @bp.route('/check_balance', methods=['POST'])
 def check_balance():
+    # ... (原有代码保持不变) ...
     try:
         data = request.json
         exchange_id = data.get('exchange_id', 'binance')
@@ -56,13 +58,27 @@ def get_kline():
     try:
         symbol = request.args.get('symbol', 'BTC/USDT')
         tf = request.args.get('tf', '1h')
-        exchange = ccxt.binance({'enableRateLimit': True})
+        
+        # 【新增】动态获取数据源，与 Monitor 保持一致
+        source = getattr(Config, 'MARKET_SOURCE', 'binance')
+        
+        # 实例化临时交易所
+        if source == 'coinbase':
+            exchange = ccxt.coinbase({'enableRateLimit': True})
+            # 智能适配: USDT -> USD
+            if 'USDT' in symbol:
+                symbol = symbol.replace('USDT', 'USD')
+        elif source == 'okx':
+            exchange = ccxt.okx({'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
+        else:
+            exchange = ccxt.binance({'enableRateLimit': True})
+        
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=500)
         return jsonify({"status": "ok", "data": ohlcv})
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)})
 
-# --- 合约机器人控制接口 ---
+# ... (future_start, stop, pause, resume, update 保持不变) ...
 
 @bp.route('/future/start', methods=['POST'])
 def future_start():
@@ -77,7 +93,6 @@ def future_stop():
     BotManager.stop_bot()
     return jsonify({"status": "ok"})
 
-# 【新增】暂停
 @bp.route('/future/pause', methods=['POST'])
 def future_pause():
     try:
@@ -86,7 +101,6 @@ def future_pause():
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)})
 
-# 【新增】恢复
 @bp.route('/future/resume', methods=['POST'])
 def future_resume():
     try:
@@ -112,23 +126,33 @@ def future_status():
     
     res = {
         "running": False,
-        "paused": False, # <--- 【新增】
+        "paused": False,
         "logs": list(SharedState.system_logs),
         "profit": 0, "orders": [], "funding_rate": 0, 
         "liquidation": 0, "current_pos": 0, "entry_price": 0, 
         "wallet_balance": 0, "current_price": 0, "smi": 0, "rsi": 0
     }
     
-    if bot:
+    # 1. 先填充公共行情 (作为兜底)
+    # 假设机器人配置了 BTC/USDT，尝试从 SharedState 拿数据
+    target_symbol = "BTC/USDT" 
+    if bot: target_symbol = bot.config.get('symbol', "BTC/USDT")
+    
+    if target_symbol in SharedState.market_data:
+        m_data = SharedState.market_data[target_symbol]
+        res['current_price'] = m_data['price'] # 默认用公共价格
+        res['smi'] = m_data['smi']
+        res['rsi'] = m_data['rsi']
+
+    # 2. 如果机器人正在运行，强制覆盖为真实合约价格 (微观精准化)
+    if bot and bot.running:
         res['running'] = bot.running
-        res['paused'] = bot.paused # <--- 【新增】
-        res.update(bot.status_data)
+        res['paused'] = bot.paused
+        res.update(bot.status_data) # 这里包含了 entry_price, current_pos 等
         
-        sym = bot.config.get('symbol')
-        if sym in SharedState.market_data:
-            m_data = SharedState.market_data[sym]
-            res['current_price'] = m_data['price']
-            res['smi'] = m_data['smi']
-            res['rsi'] = m_data['rsi']
+        # 【核心修正】: 用机器人内部的 last_price 覆盖公共 price
+        # 这样你在面板看到的一定是 OKX 合约的真实成交价
+        if bot.status_data.get('last_price', 0) > 0:
+            res['current_price'] = bot.status_data['last_price']
             
     return jsonify(res)

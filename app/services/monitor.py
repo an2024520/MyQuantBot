@@ -4,70 +4,104 @@ import time
 import ccxt
 from collections import deque
 from app.utils.indicators import calculate_rsi, calculate_smi
+from config import Config  # 【新增】引入配置
 
-# === 全局共享数据 (替代原本的 SHARED_DATA) ===
+# === 全局共享数据 ===
 class SharedState:
-    market_data = {}  # 存储行情 { 'BTC/USDT': {...} }
-    system_logs = deque(maxlen=200) # 存储日志
+    market_data = {}  # { 'BTC/USDT': {...} }
+    system_logs = deque(maxlen=200) 
     
-    # 监控配置
+    # 监控列表 (前端显示用)
     watch_settings = {
         "BTC/USDT": "1h", "ETH/USDT": "1h", "SOL/USDT": "1h",
         "BTC/USDC": "1h", "ETH/USDC": "1h", "SOL/USDC": "1h"
     }
 
 def add_log(msg):
-    """全局日志写入"""
     ts = time.strftime("%H:%M:%S")
     log_entry = f"[{ts}] {msg}"
     SharedState.system_logs.insert(0, log_entry)
-    print(log_entry) # 同时打印到控制台
+    print(log_entry)
+
+def get_public_exchange():
+    """【新增】根据配置获取交易所实例 (工厂模式)"""
+    source = getattr(Config, 'MARKET_SOURCE', 'binance')
+    
+    common_params = {
+        'enableRateLimit': True, 
+        'timeout': 30000
+    }
+
+    if source == 'coinbase':
+        print(f">>> [System] 公共行情源: Coinbase (现货/机构)")
+        return ccxt.coinbase(common_params)
+    
+    elif source == 'okx':
+        print(f">>> [System] 公共行情源: OKX (合约)")
+        # OKX 特殊处理：默认看 Swap
+        params = common_params.copy()
+        params['options'] = {'defaultType': 'swap'}
+        return ccxt.okx(params)
+    
+    else: # 默认 binance
+        print(f">>> [System] 公共行情源: Binance")
+        return ccxt.binance(common_params)
 
 def market_monitor_thread():
-    """后台监控线程"""
-    from app.services.bot_manager import BotManager  # 延迟导入防止循环引用
+    from app.services.bot_manager import BotManager
     
-    exchange = ccxt.binance({'enableRateLimit': True, 'timeout': 30000})
+    # 1. 初始化交易所
+    exchange = get_public_exchange()
     symbols = list(SharedState.watch_settings.keys())
     
     print(">>> [System] 智能监控服务已启动...")
     
     while True:
         try:
-            for symbol in symbols:
+            for display_symbol in symbols:
+                # 【新增】智能符号适配 (Smart Adapter)
+                query_symbol = display_symbol
+                
+                # 如果是 Coinbase，它主力是 USD，这里做隐式映射
+                # 前端看 BTC/USDT -> 后台查 BTC/USD
+                if Config.MARKET_SOURCE == 'coinbase' and 'USDT' in display_symbol:
+                    query_symbol = display_symbol.replace('USDT', 'USD')
+                
                 # 1. 获取价格
                 try:
-                    ticker = exchange.fetch_ticker(symbol)
+                    ticker = exchange.fetch_ticker(query_symbol)
                     current_price = float(ticker['last'])
-                except:
+                except Exception as e:
+                    # 偶尔报错不打印，防止刷屏
                     continue
                 
                 # 2. 计算指标
-                tf = SharedState.watch_settings.get(symbol, '1h')
-                ohlcv = exchange.fetch_ohlcv(symbol, tf, limit=500)
-                closes = [x[4] for x in ohlcv]
-                
-                rsi = calculate_rsi(closes)
-                smi, sig = calculate_smi(closes)
-                
-                # 3. 更新共享状态
-                SharedState.market_data[symbol] = {
-                    "price": current_price,
-                    "tf": tf,
-                    "rsi": round(rsi, 2) if rsi else 0,
-                    "smi": round(smi, 5) if smi else 0,
-                    "sig": round(sig, 5) if sig else 0
-                }
+                tf = SharedState.watch_settings.get(display_symbol, '1h')
+                try:
+                    ohlcv = exchange.fetch_ohlcv(query_symbol, tf, limit=500)
+                    closes = [x[4] for x in ohlcv]
+                    
+                    rsi = calculate_rsi(closes)
+                    smi, sig = calculate_smi(closes)
+                    
+                    # 3. 更新共享状态 (注意：Key 依然用 display_symbol，保持前端一致)
+                    SharedState.market_data[display_symbol] = {
+                        "price": current_price,
+                        "tf": tf,
+                        "rsi": round(rsi, 2) if rsi else 0,
+                        "smi": round(smi, 5) if smi else 0,
+                        "sig": round(sig, 5) if sig else 0,
+                        "source": Config.MARKET_SOURCE # 标记来源
+                    }
+                except:
+                    continue
                 
                 # 4. 驱动机器人 (只驱动合约机器人)
                 bot = BotManager.get_bot()
                 if bot and bot.running:
-                    # 只有当机器人的交易对匹配当前轮询的 symbol 时才驱动
-                    if bot.config.get('symbol') == symbol:
-                        try:
-                            bot.run_step(current_price)
-                        except Exception as e:
-                            add_log(f"Bot Error: {e}")
+                    # 注意：机器人自己有 fetch_market_data，这里仅作为 fallback 或触发器
+                    # 实际交易中，机器人使用自己的行情源，这里不需要频繁驱动
+                    pass 
 
             time.sleep(2)
             
