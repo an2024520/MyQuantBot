@@ -46,21 +46,18 @@ class FutureGridBot:
             secret = self.config.get('secret', '')
             password = self.config.get('password', '')
 
-            # 2. 【核心修改】从外部绝对路径加载密钥舱
-            # 只有当前端没传 Key 时才触发，路径硬编码为系统级安全目录
+            # 2. 从外部绝对路径加载密钥舱
             EXTERNAL_SECRETS_PATH = "/opt/myquant_config/secrets.py"
             
             if not api_key:
                 if os.path.exists(EXTERNAL_SECRETS_PATH):
                     try:
-                        # 动态加载外部 Python 文件
                         spec = importlib.util.spec_from_file_location("external_secrets", EXTERNAL_SECRETS_PATH)
                         ext_mod = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(ext_mod)
                         
                         keys = getattr(ext_mod, 'HARDCODED_KEYS', {})
                         
-                        # 仅当交易所 ID 匹配时才加载 (防止 OKX 用了币安的 Key)
                         if keys.get('exchange_id') == exchange_id:
                             api_key = keys.get('apiKey', '')
                             secret = keys.get('secret', '')
@@ -69,7 +66,6 @@ class FutureGridBot:
                     except Exception as e:
                         self.log(f"[系统] 外部密钥加载失败: {e}")
                 else:
-                    # 文件不存在，可能是本地开发或未配置，保持静默
                     pass
 
             # 3. 构造交易所参数
@@ -155,11 +151,9 @@ class FutureGridBot:
         except: return 0.0
 
     def sync_account_data(self):
-        """【Phase 3】独立账户同步方法：只在需要时调用"""
         if not self.running or not self.exchange.apiKey: return
 
         try:
-            # 1. 获取持仓
             positions = self.exchange.fetch_positions([self.market_symbol])
             found_pos = False
             for pos in positions:
@@ -172,12 +166,11 @@ class FutureGridBot:
                     break
             if not found_pos: self.status_data['current_pos'] = 0
 
-            # 2. 获取余额
             balance = self.exchange.fetch_balance()
             quote_currency = self.config['symbol'].split('/')[1] 
             self.status_data['wallet_balance'] = float(balance.get(quote_currency, {}).get('total', 0))
             
-            self.last_sync_time = time.time() # 更新同步时间戳
+            self.last_sync_time = time.time() 
             
         except Exception as e:
             self.log(f"[数据同步失败] {e}")
@@ -237,20 +230,17 @@ class FutureGridBot:
         return False
 
     def calculate_grid_index(self, price):
-        """仅计算网格索引，不更新状态"""
         if price == 0: return -1
         grid_idx = -1
         for i, p in enumerate(self.grids):
             if price >= p: grid_idx = i
             else: break
         
-        # 边界处理
         if grid_idx < 0: grid_idx = 0 
         if grid_idx >= len(self.grids): grid_idx = len(self.grids) - 1 
         return grid_idx
 
     def calculate_target_position(self, grid_idx):
-        """根据网格索引计算目标仓位"""
         mode = self.config.get('strategy_type', 'neutral')
         amount_per_grid = float(self.config['amount'])
         total_grids = len(self.grids) - 1
@@ -310,9 +300,11 @@ class FutureGridBot:
             
             ticker = self.exchange.fetch_ticker(self.market_symbol)
             if side == 'buy':
-                limit_price = float(ticker['ask']) * 1.01
+                # 【修正】将滑点保护从 1% 降低到 0.2%，防止触发 OKX 价格限制 (Order price limit)
+                limit_price = float(ticker['ask']) * 1.002
             else:
-                limit_price = float(ticker['bid']) * 0.99
+                # 【修正】将滑点保护从 1% 降低到 0.2%
+                limit_price = float(ticker['bid']) * 0.998
 
             price_str = self._to_precision(price=limit_price)
             qty_str = self._to_precision(amount=qty)
@@ -326,7 +318,7 @@ class FutureGridBot:
             filled = float(order.get('filled', 0))
             if filled > 0:
                 self.log(f"[成交确认] IOC订单成交，数量: {filled}")
-                self.force_sync = True # 下单成功后，标记下次需要强制同步
+                self.force_sync = True 
             else:
                 self.log(f"[未成交] IOC订单被取消")
 
@@ -339,7 +331,6 @@ class FutureGridBot:
                 self.log(f"[纠偏失败] {e}")
 
     def manage_maker_orders(self, current_grid_idx):
-        """【Phase 2 & 3】智能差分挂单 (Diff) + 缓存复用"""
         if not self.exchange.apiKey: 
             self.update_orders_display(current_grid_idx)
             return
@@ -354,7 +345,6 @@ class FutureGridBot:
             target_buy_prices = {self.grids[i] for i in buy_indices}
             target_sell_prices = {self.grids[i] for i in sell_indices}
             
-            # Fetch Open Orders (消耗 API 权重)
             open_orders = self.exchange.fetch_open_orders(self.market_symbol)
             
             to_cancel_ids = []
@@ -390,7 +380,6 @@ class FutureGridBot:
                 p = self.grids[idx]
                 if p not in active_sell_prices: to_create_specs.append(('sell', p))
 
-            # 执行逻辑
             def exec_cancel(order_ids):
                 for oid in order_ids:
                     try:
@@ -412,10 +401,9 @@ class FutureGridBot:
                 return created
 
             try:
-                # 优先补单
                 if to_create_specs: 
                     if exec_create(to_create_specs):
-                        self.force_sync = True # 挂单变动，下次强制同步
+                        self.force_sync = True 
 
                 if to_cancel_ids: 
                     exec_cancel(to_cancel_ids)
@@ -462,15 +450,11 @@ class FutureGridBot:
             self.log(f"[显示更新错误] {e}")
 
     def run_step(self, current_price):
-        """
-        【Phase 3】高性能事件驱动引擎
-        """
         if not self.running: return
         self.status_data['last_price'] = current_price
         
         if self.paused: return 
         
-        # 1. 模拟模式下：不等待心跳，直接计算（保证模拟盘流畅）
         if not self.exchange.apiKey:
             self.sim_calculate_pnl()
             idx = self.calculate_grid_index(current_price)
@@ -479,16 +463,12 @@ class FutureGridBot:
             self.update_orders_display(idx)
             return
 
-        # 2. 极速风控
         if self.check_risk_management(): return
 
         now = time.time()
-        
-        # 3. 计算当前网格位置
         new_grid_idx = self.calculate_grid_index(current_price)
         self.status_data['current_grid_idx'] = new_grid_idx
         
-        # 4. 判断触发条件
         should_sync = False
         
         if self.force_sync:
@@ -498,19 +478,12 @@ class FutureGridBot:
         elif (now - self.last_sync_time) > self.sync_interval:
             should_sync = True
 
-        # 5. 执行同步与交易
         if should_sync:
-            # A. 同步账户
             self.sync_account_data()
-            
-            # B. 计算目标并调整
             target_pos = self.calculate_target_position(new_grid_idx)
             self.adjust_position(target_pos)
-            
-            # C. 维护挂单
             self.manage_maker_orders(new_grid_idx)
             
-            # D. 更新状态
             self.last_grid_idx = new_grid_idx
             self.last_sync_time = now
             self.force_sync = False
@@ -527,7 +500,6 @@ class FutureGridBot:
                 ticker = self.exchange.fetch_ticker(self.market_symbol)
                 start_price = float(ticker['last'])
                 self.status_data['last_price'] = start_price
-                # 计算初始网格并渲染 (UI)
                 idx = self.calculate_grid_index(start_price)
                 self.update_orders_display(idx)
                 self.log(f"[系统] 初始挂单墙已生成，当前价: {start_price}")
@@ -538,13 +510,10 @@ class FutureGridBot:
             mode = self.config.get('strategy_type')
             self.log(f"[合约] 策略启动 (Phase 3 Engine) | 模式: {mode}")
 
-            # ==========================================
-            # ✅ 核心修复：启动即执行，不要等待 Monitor 推送
-            # ==========================================
+            # 启动即执行
             if start_price > 0:
                 self.log("[系统] 正在执行首单建仓...")
                 self.run_step(start_price)
-            # ==========================================
 
         else:
             self.running = False
@@ -563,7 +532,7 @@ class FutureGridBot:
 
     def resume(self):
         self.paused = False
-        self.force_sync = True # 恢复时强制同步
+        self.force_sync = True 
         self.log("[指令] 策略恢复运行！")
 
     def stop(self):
