@@ -55,64 +55,60 @@ def get_public_exchange():
 def market_monitor_thread():
     from app.services.bot_manager import BotManager
     
-    # 1. 初始化交易所
+    # 1. 初始化 (加长超时 + 关闭日志)
     exchange = get_public_exchange()
-    symbols = list(SharedState.watch_settings.keys())
+    exchange.timeout = 120000       # 120秒超时
+    exchange.verbose = False        # 禁止啰嗦
     
-    print(">>> [System] 智能监控服务已启动...")
+    symbols = list(SharedState.watch_settings.keys())
+    print(">>> [System] Monitor thread started (Safe Mode).")
     
     while True:
         try:
             for display_symbol in symbols:
-                # 【新增】智能符号适配 (Smart Adapter)
+                # Coinbase 适配
                 query_symbol = display_symbol
-                
-                # 如果是 Coinbase，它主力是 USD，这里做隐式映射
-                # 前端看 BTC/USDT -> 后台查 BTC/USD
-                if Config.MARKET_SOURCE == 'coinbase' and 'USDT' in display_symbol:
+                if getattr(Config, 'MARKET_SOURCE', 'binance') == 'coinbase' and 'USDT' in display_symbol:
                     query_symbol = display_symbol.replace('USDT', 'USD')
                 
-                # 1. 获取价格
                 try:
+                    # 抓取数据
                     ticker = exchange.fetch_ticker(query_symbol)
                     current_price = float(ticker['last'])
-                except Exception as e:
-                    # 偶尔报错不打印，防止刷屏
-                    continue
-                
-                # 2. 计算指标
-                tf = SharedState.watch_settings.get(display_symbol, '1h')
-                try:
-                    ohlcv = exchange.fetch_ohlcv(query_symbol, tf, limit=500)
+                    
+                    # 抓取 K 线
+                    tf = SharedState.watch_settings.get(display_symbol, '1h')
+                    ohlcv = exchange.fetch_ohlcv(query_symbol, tf, limit=100) # 减少数据量到 100
                     closes = [x[4] for x in ohlcv]
                     
+                    # 计算指标
                     rsi = calculate_rsi(closes)
                     smi, sig = calculate_smi(closes)
                     
-                    # 3. 更新共享状态 (注意：Key 依然用 display_symbol，保持前端一致)
+                    # 更新状态
                     SharedState.market_data[display_symbol] = {
                         "price": current_price,
                         "tf": tf,
                         "rsi": round(rsi, 2) if rsi else 0,
                         "smi": round(smi, 5) if smi else 0,
-                        "sig": round(sig, 5) if sig else 0,
-                        "source": Config.MARKET_SOURCE # 标记来源
+                        "source": getattr(Config, 'MARKET_SOURCE', 'binance')
                     }
-                except:
-                    continue
+                    
+                    # 成功获取一个就打印一个简短标记 (避免中文/特殊符号)
+                    # print(f"Updated: {display_symbol}") 
                 
-                # 4. 驱动机器人 (只驱动合约机器人)
-                bot = BotManager.get_bot()
-                if bot and bot.running:
-                    # 注意：机器人自己有 fetch_market_data，这里仅作为 fallback 或触发器
-                    # 实际交易中，机器人使用自己的行情源，这里不需要频繁驱动
-                    pass 
-
-            time.sleep(2)
+                except Exception as inner_e:
+                    # 【关键】这里不要打印 inner_e 的具体内容，防止包含乱码导致线程崩溃
+                    # print("Update failed.") 
+                    continue
+            
+            # 休息一下
+            time.sleep(5)
             
         except Exception as e:
-            print(f"[Monitor Error] {e}")
-            time.sleep(5)
+            # 【关键】全局错误也不要打印详细内容
+            print("[Monitor] Global loop error (suppressed to prevent crash).")
+            time.sleep(10)
 
 def start_market_monitor():
     t = threading.Thread(target=market_monitor_thread, daemon=True)
