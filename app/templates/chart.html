@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>行情分析 - MyQuant</title>
+    <style>
+        body { margin: 0; padding: 0; background: #000; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+        #chart-container { width: 100vw; height: 100vh; position: relative; }
+        
+        /* 顶部悬浮栏 */
+        .header { 
+            position: absolute; top: 12px; left: 12px; z-index: 20; 
+            color: #d1d4dc; background: rgba(19, 23, 34, 0.9); 
+            padding: 6px 12px; border-radius: 6px; 
+            display: flex; gap: 15px; align-items: center; border: 1px solid #2b2b43;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        .symbol-group { display: flex; align-items: baseline; gap: 8px; }
+        .symbol-name { font-size: 1.1rem; font-weight: bold; color: #f0b90b; }
+        .price-live { font-family: 'Consolas', monospace; font-size: 1.1rem; font-weight: bold; color: #fff; min-width: 80px; }
+        
+        .btn-back { cursor: pointer; color: #888; text-decoration: none; font-size: 0.9rem; transition: color 0.2s; }
+        .btn-back:hover { color: #fff; }
+        
+        .divider { width: 1px; height: 16px; background: #444; }
+
+        /* 下拉框美化 */
+        select { 
+            background: #000; color: #eaecef; border: 1px solid #444; 
+            padding: 3px 6px; border-radius: 4px; cursor: pointer; outline: none;
+        }
+        select:hover { border-color: #666; }
+    </style>
+    <script src="https://unpkg.com/lightweight-charts@4.0.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+    <div id="chart-container"></div>
+    
+    <div class="header">
+        <a href="/" class="btn-back">← 返回</a>
+        <div class="divider"></div>
+        
+        <div class="symbol-group">
+            <div class="symbol-name" id="symbol-title">--/--</div>
+            <div class="price-live" id="price-live">--.--</div>
+        </div>
+        
+        <div class="divider"></div>
+        
+        <select id="tf-select">
+            <option value="15m">15m</option>
+            <option value="1h" selected>1H</option>
+            <option value="4h">4H</option>
+            <option value="1d">1D</option>
+        </select>
+    </div>
+
+<script>
+    // --- 1. 初始化图表 ---
+    const chartContainer = document.getElementById('chart-container');
+    const pathParts = window.location.pathname.split('/');
+    const rawSymbol = pathParts[pathParts.length - 1]; 
+    const symbol = rawSymbol.replace('_', '/');
+    document.getElementById('symbol-title').innerText = symbol;
+
+    const chart = LightweightCharts.createChart(chartContainer, {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        layout: { background: { type: 'solid', color: '#0b0e11' }, textColor: '#848e9c', },
+        grid: { vertLines: { color: '#1e2329' }, horzLines: { color: '#1e2329' }, },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: '#2b2b43', scaleMargins: { top: 0.05, bottom: 0.25 } },
+        timeScale: { borderColor: '#2b2b43', timeVisible: true, secondsVisible: false },
+    });
+
+    const candleSeries = chart.addCandlestickSeries({
+        upColor: '#0ecb81', downColor: '#f6465d', borderVisible: false, wickUpColor: '#0ecb81', wickDownColor: '#f6465d',
+    });
+
+    const volumeSeries = chart.addHistogramSeries({
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'vol_scale',
+    });
+
+    chart.priceScale('vol_scale').applyOptions({
+        scaleMargins: { top: 0.76, bottom: 0 },
+    });
+
+    // --- 2. 核心优化部分 ---
+    let currentTF = '1h';
+    let abortController = null; // 用于中断旧请求的控制器
+    let fetchTimer = null;      // 计时器句柄
+
+    async function updateData(isManualSwitch = false) {
+        // A. 如果是手动切换，立即中断之前的请求
+        if (isManualSwitch && abortController) {
+            abortController.abort();
+            console.log("已中断旧请求，优先处理新周期");
+        }
+        
+        // B. 如果不是手动切换，且上一个请求还没结束，则跳过本次（防止积压）
+        // 这里的逻辑是：如果是自动刷新，我们用 setTimeout 递归控制，所以不需要额外判断
+        
+        // 创建新的中断控制器
+        abortController = new AbortController();
+        const signal = abortController.signal;
+        
+        // 锁定当前的周期（防止请求回来时周期又变了）
+        const activeTF = currentTF;
+
+        try {
+            // C. 发起请求 (带上 signal)
+            const res = await fetch(`/api/kline?symbol=${encodeURIComponent(symbol)}&tf=${activeTF}&t=${Date.now()}`, { 
+                signal: signal 
+            });
+            const json = await res.json();
+            
+            // D. 版本校验：如果由于网络延迟，回来时周期已经变了，直接丢弃
+            if (activeTF !== currentTF) return;
+            if (json.status !== 'ok') return;
+
+            const rawData = json.data;
+            if (!rawData || rawData.length === 0) return;
+
+            // 更新价格
+            const lastClose = rawData[rawData.length - 1][4];
+            const prevClose = rawData.length > 1 ? rawData[rawData.length - 2][4] : lastClose;
+            const priceElem = document.getElementById('price-live');
+            priceElem.innerText = lastClose.toFixed(2);
+            priceElem.style.color = lastClose >= prevClose ? '#0ecb81' : '#f6465d';
+
+            // 更新图表
+            const candles = rawData.map(d => ({
+                time: d[0] / 1000, open: d[1], high: d[2], low: d[3], close: d[4]
+            }));
+            const volumes = rawData.map((d, i) => ({
+                time: d[0] / 1000, value: d[5],
+                color: (i > 0 && d[4] >= rawData[i-1][4]) ? 'rgba(14, 203, 129, 0.5)' : 'rgba(246, 70, 93, 0.5)'
+            }));
+
+            candleSeries.setData(candles);
+            volumeSeries.setData(volumes);
+
+        } catch (e) {
+            if (e.name === 'AbortError') {
+                // 这是我们主动中断的，不用管
+            } else {
+                console.error("加载失败:", e);
+            }
+        } finally {
+            // E. 只有当本次请求彻底结束后（无论成功失败），才开启下一次倒计时
+            // 这就是“防积压”的核心！
+            if (activeTF === currentTF) {
+                // 清除旧定时器（以防万一）
+                if (fetchTimer) clearTimeout(fetchTimer);
+                // 2秒后再次执行
+                fetchTimer = setTimeout(() => updateData(false), 2000);
+            }
+        }
+    }
+
+    // --- 3. 事件监听 ---
+    document.getElementById('tf-select').addEventListener('change', (e) => {
+        currentTF = e.target.value;
+        // 清除正在排队的定时器
+        if (fetchTimer) clearTimeout(fetchTimer);
+        // 立即执行（参数 true 表示这是手动切换，要杀伐果断）
+        updateData(true);
+    });
+
+    // 启动
+    updateData(false);
+
+    window.onresize = () => chart.applyOptions({ width: window.innerWidth, height: window.innerHeight });
+</script>
+</body>
+</html>

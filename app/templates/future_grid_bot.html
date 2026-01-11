@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>合约网格终端 v7.8 Pause</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #000; color: #d4d4d4; padding: 20px; font-family: monospace; font-size: 13px; }
+        .card { background: #111; border: 1px solid #333; margin-bottom: 15px; }
+        .card-header { border-bottom: 1px solid #333; color: #f0b90b; font-weight: bold; }
+        .form-control, .form-select { background: #222; border: 1px solid #444; color: #fff; font-size: 12px; }
+        .form-control:focus { background: #222; color: #fff; border-color: #f0b90b; box-shadow: none; }
+        
+        .btn-launch { background: #f0b90b; border: none; color: #000; font-weight: bold; }
+        .btn-launch:hover { background: #dba809; }
+        
+        .btn-update { background: #0dcaf0; border: none; color: #000; font-weight: bold; }
+        .btn-update:hover { background: #0bb5d8; }
+        
+        .btn-stop { background: #da3633; border: none; }
+        .btn-stop:hover { background: #b02a28; }
+        
+        .btn-verify { 
+            background: #198754; border: 1px solid #198754; color: #fff; font-size: 12px; 
+            margin-bottom: 10px; width: 100%; padding: 5px; transition: all 0.2s;
+        }
+        .btn-verify:hover { background: #157347; border-color: #146c43; }
+        
+        .grid-wall { height: 500px; overflow-y: auto; background: #050505; }
+        .grid-row { display: flex; justify-content: space-between; padding: 4px 10px; border-bottom: 1px solid #222; }
+        .risk-val { font-size: 1.1rem; font-weight: bold; color: #fff; }
+        .risk-label { color: #666; font-size: 0.8rem; }
+        .pos-long { color: #0ecb81; }
+        .pos-short { color: #f6465d; }
+        .balance-val { color: #f0b90b; font-size: 1.3rem; font-weight: bold; }
+        
+        .hot-update-field { border-color: #0dcaf0 !important; }
+        .hot-update-label { color: #0dcaf0; font-size: 10px; margin-left: 5px; }
+    </style>
+</head>
+<body>
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-3">
+            <div class="card border-warning">
+                <div class="card-header">🔥 Hard Core 参数</div>
+                <div class="card-body">
+                    <form id="configForm">
+                        <div class="mb-2">
+                            <label>策略模式</label>
+                            <select class="form-select text-warning" name="strategy_type">
+                                <option value="neutral">中性震荡 (Neutral)</option>
+                                <option value="long">做多网格 (Long)</option>
+                                <option value="short">做空网格 (Short)</option>
+                            </select>
+                        </div>
+                        
+                        <div class="mb-2">
+                            <label>交易所</label>
+                            <select class="form-select" name="exchange_id">
+                                <option value="binance">Binance</option>
+                                <option value="okx">OKX (欧易)</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-2">
+                            <label>模拟资金 (USDT)</label>
+                            <input class="form-control" name="sim_balance" type="number" value="1000" placeholder="仅模拟模式有效">
+                        </div>
+
+                        <div class="row g-1 mb-2">
+                            <div class="col-8">
+                                <label>币种</label>
+                                <select class="form-select" name="coin">
+                                    <option value="BTC">BTC</option>
+                                    <option value="ETH">ETH</option>
+                                    <option value="SOL">SOL</option>
+                                </select>
+                            </div>
+                            <div class="col-4">
+                                <label>计价</label>
+                                <select class="form-select" name="quote">
+                                    <option value="USDT">USDT</option>
+                                    <option value="USDC">USDC</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="d-flex justify-content-between">
+                                <span>杠杆倍数</span>
+                                <span class="text-warning" id="lev-val">1x</span>
+                            </label>
+                            <input type="range" class="form-range" name="leverage" min="1" max="100" value="1" oninput="document.getElementById('lev-val').innerText=this.value+'x'">
+                        </div>
+
+                        <div class="mb-2">
+                            <button type="button" class="btn btn-verify" onclick="checkBalance()">
+                                🔍 点击查询交易所余额
+                            </button>
+                        </div>
+
+                        <div class="mb-2"><input class="form-control" name="api_key" placeholder="API Key (必填)"></div>
+                        <div class="mb-2"><input class="form-control" name="secret" type="password" placeholder="Secret Key (必填)"></div>
+                        <div class="mb-2"><input class="form-control" name="password" type="password" placeholder="Passphrase (OKX必填)"></div>
+                        
+                        <hr style="border-color:#444">
+                        <div class="text-muted small mb-1">⬇️ 蓝色边框项可在运行时修改</div>
+
+                        <div class="row g-1 mb-2">
+                            <div class="col">
+                                <label>止损价 <span class="hot-update-label">Hot</span></label>
+                                <input class="form-control hot-update-field" name="stop_loss" type="number" placeholder="止损价">
+                            </div>
+                            <div class="col">
+                                <label>止盈价 <span class="hot-update-label">Hot</span></label>
+                                <input class="form-control hot-update-field" name="take_profit" type="number" placeholder="止盈价">
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label>挂单窗口 (Active Window) <span class="hot-update-label">Hot</span></label>
+                            <input class="form-control hot-update-field" name="active_order_limit" type="number" min="1" max="20" value="5" placeholder="单边挂单数">
+                        </div>
+
+                        <hr style="border-color:#444">
+
+                        <div class="row g-1 mb-2">
+                            <div class="col"><input class="form-control" name="lower_price" type="number" placeholder="下限" value="80000"></div>
+                            <div class="col"><input class="form-control" name="upper_price" type="number" placeholder="上限" value="100000"></div>
+                        </div>
+                        <div class="row g-1 mb-2">
+                            <div class="col">
+                                <label>格数</label>
+                                <input class="form-control" name="grid_num" type="number" placeholder="格数" value="20">
+                            </div>
+                            <div class="col">
+                                <label>数量 (OKX填张, BN填币)</label>
+                                <input class="form-control" name="amount" type="number" step="0.00001" placeholder="数量" value="0.0001">
+                            </div>
+                        </div>
+                        
+                        <div class="row g-2 mt-3">
+                            <div class="col-3">
+                                <button type="button" class="btn btn-launch w-100" onclick="start()">🚀 启动</button>
+                            </div>
+                            <div class="col-3">
+                                <button type="button" class="btn btn-update w-100" onclick="updateParams()">🔄 更新</button>
+                            </div>
+                            <div class="col-3">
+                                <button type="button" class="btn btn-warning w-100" id="btn-pause" onclick="togglePause()" disabled>⏸ 暂停</button>
+                            </div>
+                            <div class="col-3">
+                                <button type="button" class="btn btn-stop w-100" onclick="stop()">⏹ 停止</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            
+            <div class="card">
+                <div class="card-header text-danger">账户监控</div>
+                <div class="card-body">
+                    <div class="text-center mb-3 border-bottom pb-2">
+                        <div class="balance-val" id="wallet-balance">---</div>
+                        <div class="risk-label">账户总权益</div>
+                    </div>
+
+                    <div class="row text-center mb-2">
+                        <div class="col">
+                            <div class="risk-val" id="pos-amt">0</div>
+                            <div class="risk-label">持仓数量</div>
+                        </div>
+                        <div class="col">
+                            <div class="risk-val text-warning" id="entry-price">0</div>
+                            <div class="risk-label">持仓均价</div>
+                        </div>
+                    </div>
+                    <div class="row text-center">
+                         <div class="col">
+                            <div class="risk-val text-danger" id="liq-price">---</div>
+                            <div class="risk-label">强平价</div>
+                        </div>
+                        <div class="col">
+                            <div class="risk-val text-muted" id="funding-rate">0%</div>
+                            <div class="risk-label">费率</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>
+                        挂单墙 
+                        <span class="ms-2 small text-muted">当前价: <span id="cur-price" class="text-white">---</span></span>
+                    </span>
+                    <div>
+                         <span class="badge bg-dark border border-secondary me-1">SMI: <span id="smi-val">--</span></span>
+                         <span class="badge bg-secondary" id="status-badge">OFFLINE</span>
+                    </div>
+                </div>
+                <div class="grid-wall" id="grid-wall"></div>
+            </div>
+        </div>
+        
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-header">日志</div>
+                <div class="log-box" id="logs" style="height:600px;overflow-y:auto;color:#888;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    function start() {
+        const formData = new FormData(document.getElementById('configForm'));
+        const data = Object.fromEntries(formData);
+        data.symbol = `${data.coin}/${data.quote}`;
+        fetch('/api/future/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)})
+        .then(r=>r.json()).then(res => { if(res.status!=='ok') alert(res.msg); });
+    }
+    
+    function stop() { fetch('/api/future/stop', {method:'POST'}); }
+
+    function updateParams() {
+        const formData = new FormData(document.getElementById('configForm'));
+        const data = Object.fromEntries(formData);
+        fetch('/api/future/update', {
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'}, 
+            body: JSON.stringify(data)
+        })
+        .then(r => r.json())
+        .then(res => {
+            alert(res.msg);
+        })
+        .catch(err => alert("更新失败: " + err));
+    }
+
+    // 【新增】暂停/恢复逻辑
+    function togglePause() {
+        const btn = document.getElementById('btn-pause');
+        const isPaused = btn.innerText.includes('恢复');
+        const url = isPaused ? '/api/future/resume' : '/api/future/pause';
+        
+        fetch(url, {method:'POST'})
+        .then(r=>r.json())
+        .then(res => {
+            if(res.status!=='ok') alert(res.msg);
+        });
+    }
+
+    function checkBalance() {
+        const formData = new FormData(document.getElementById('configForm'));
+        const data = Object.fromEntries(formData);
+        
+        if (!data.api_key || !data.secret) {
+            alert("请先填写 API Key 和 Secret Key！");
+            return;
+        }
+        if (data.exchange_id === 'okx' && !data.password) {
+            alert("OKX 交易所必须填写 Passphrase！");
+            return;
+        }
+
+        const balElem = document.getElementById('wallet-balance');
+        const oldText = balElem.innerText;
+        balElem.innerText = "Checking...";
+
+        fetch('/api/check_balance', {
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'}, 
+            body: JSON.stringify(data)
+        })
+        .then(r => r.json())
+        .then(res => {
+            if (res.status === 'ok') {
+                balElem.innerText = res.balance.toFixed(2) + ' ' + data.quote;
+            } else {
+                alert("查询失败: " + res.msg);
+                balElem.innerText = oldText;
+            }
+        })
+        .catch(err => {
+            alert("请求错误: " + err);
+            balElem.innerText = oldText;
+        });
+    }
+
+    setInterval(() => {
+        fetch('/api/future/status').then(r=>r.json()).then(d => {
+            const amt = d.current_pos;
+            const amtElem = document.getElementById('pos-amt');
+            amtElem.innerText = amt;
+            amtElem.className = amt > 0 ? 'risk-val pos-long' : (amt < 0 ? 'risk-val pos-short' : 'risk-val');
+            
+            document.getElementById('entry-price').innerText = d.entry_price || '---';
+            document.getElementById('liq-price').innerText = d.liquidation ? d.liquidation.toFixed(2) : '---';
+            document.getElementById('funding-rate').innerText = d.funding_rate ? d.funding_rate.toFixed(4) + '%' : '---';
+            
+            if (d.running && d.wallet_balance > 0) {
+                 document.getElementById('wallet-balance').innerText = d.wallet_balance.toFixed(2);
+            }
+            
+            document.getElementById('cur-price').innerText = d.current_price;
+            document.getElementById('smi-val').innerText = d.smi ? d.smi.toFixed(4) : '--';
+            
+            const badge = document.getElementById('status-badge');
+            const pauseBtn = document.getElementById('btn-pause');
+
+            // 状态逻辑更新
+            if(d.running) { 
+                if (d.paused) {
+                    badge.className='badge bg-warning text-dark'; 
+                    badge.innerText='PAUSED';
+                    pauseBtn.innerText = "▶️ 恢复";
+                    pauseBtn.className = "btn btn-success w-100";
+                    pauseBtn.disabled = false;
+                } else {
+                    badge.className='badge bg-success'; 
+                    badge.innerText='RUNNING';
+                    pauseBtn.innerText = "⏸ 暂停";
+                    pauseBtn.className = "btn btn-warning w-100";
+                    pauseBtn.disabled = false;
+                }
+            } else { 
+                badge.className='badge bg-secondary'; 
+                badge.innerText='OFFLINE'; 
+                pauseBtn.disabled = true;
+                pauseBtn.innerText = "⏸ 暂停";
+                pauseBtn.className = "btn btn-warning w-100";
+            }
+
+            if (d.orders && d.orders.length) {
+                const html = d.orders.map(o => `
+                    <div class="grid-row ${o.style}">
+                        <span style="width:10%">#${o.idx}</span>
+                        <span style="width:30%">${o.price}</span>
+                        <span style="width:20%">${o.type}</span>
+                        <span style="width:20%">${o.amt}</span>
+                    </div>`).join('');
+                document.getElementById('grid-wall').innerHTML = html;
+            }
+
+            if (d.logs && d.logs.length) {
+                document.getElementById('logs').innerHTML = d.logs.map(l => `<div>${l}</div>`).join('');
+            }
+        });
+    }, 1500);
+</script>
+</body>
+</html>
