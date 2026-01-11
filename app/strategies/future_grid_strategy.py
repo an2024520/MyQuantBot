@@ -2,8 +2,8 @@
 import ccxt
 import time
 import math
-import os                   # 【新增】用于路径检查
-import importlib.util       # 【新增】用于动态加载外部模块
+import os                   
+import importlib.util       
 
 class FutureGridBot:
     def __init__(self, config, logger_func):
@@ -522,22 +522,30 @@ class FutureGridBot:
             self.force_sync = True 
             self.last_grid_idx = -1
             
-            # 【核心修复】立刻执行一次初始渲染，解决挂单墙空白问题
+            start_price = 0
             try:
                 ticker = self.exchange.fetch_ticker(self.market_symbol)
-                price = float(ticker['last'])
-                self.status_data['last_price'] = price
-                # 计算初始网格并渲染
-                idx = self.calculate_grid_index(price)
+                start_price = float(ticker['last'])
+                self.status_data['last_price'] = start_price
+                # 计算初始网格并渲染 (UI)
+                idx = self.calculate_grid_index(start_price)
                 self.update_orders_display(idx)
-                self.log(f"[系统] 初始挂单墙已生成，当前价: {price}")
+                self.log(f"[系统] 初始挂单墙已生成，当前价: {start_price}")
             except Exception as e:
-                # 如果获取失败（如网络问题），也渲染一个默认的空白网格
                 self.log(f"[警告] 初始价格获取延迟: {e}")
                 self.update_orders_display(-1)
             
             mode = self.config.get('strategy_type')
             self.log(f"[合约] 策略启动 (Phase 3 Engine) | 模式: {mode}")
+
+            # ==========================================
+            # ✅ 核心修复：启动即执行，不要等待 Monitor 推送
+            # ==========================================
+            if start_price > 0:
+                self.log("[系统] 正在执行首单建仓...")
+                self.run_step(start_price)
+            # ==========================================
+
         else:
             self.running = False
 
