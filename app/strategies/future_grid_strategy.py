@@ -10,15 +10,21 @@ class FutureGridBot:
         self.exchange = None
         self.grids = []
         self.running = False
-        self.paused = False  # <--- 【新增】暂停状态
+        self.paused = False 
         self.market_symbol = None 
         
-        self.last_update_time = 0 
+        # --- Phase 3: 智能轮询状态机 ---
+        self.last_sync_time = 0      # 上次同步账户的时间
+        self.last_grid_idx = -1      # 上次计算所在的网格索引
+        self.force_sync = True       # 强制同步标志位
+        self.sync_interval = 15      # 账户同步心跳 (秒)
+        # -----------------------------
         
+        # 前端交互的核心数据结构
         self.status_data = {
             "current_grid_idx": -1,
-            "total_profit": 0, 
-            "grid_orders": [], 
+            "profit": 0,           
+            "orders": [],          
             "liquidation_price": 0, 
             "unrealized_pnl": 0,    
             "funding_rate": 0,      
@@ -113,35 +119,33 @@ class FutureGridBot:
             return 0.0
         except: return 0.0
 
-    def fetch_market_data(self):
-        if not self.running: return
+    def sync_account_data(self):
+        """【Phase 3】独立账户同步方法：只在需要时调用"""
+        if not self.running or not self.exchange.apiKey: return
 
         try:
-            ticker = self.exchange.fetch_ticker(self.market_symbol)
-            self.status_data['last_price'] = float(ticker['last'])
-        except: return 
+            # 1. 获取持仓
+            positions = self.exchange.fetch_positions([self.market_symbol])
+            found_pos = False
+            for pos in positions:
+                if pos['symbol'] == self.market_symbol:
+                    self.status_data['current_pos'] = self._get_position_amount(pos['info'])
+                    self.status_data['entry_price'] = float(pos.get('entryPrice') or 0)
+                    self.status_data['liquidation_price'] = float(pos.get('liquidationPrice') or 0)
+                    self.status_data['unrealized_pnl'] = float(pos.get('unrealizedPnl') or 0)
+                    found_pos = True
+                    break
+            if not found_pos: self.status_data['current_pos'] = 0
 
-        if self.exchange.apiKey:
-            try:
-                positions = self.exchange.fetch_positions([self.market_symbol])
-                found_pos = False
-                for pos in positions:
-                    if pos['symbol'] == self.market_symbol:
-                        self.status_data['current_pos'] = self._get_position_amount(pos['info'])
-                        self.status_data['entry_price'] = float(pos.get('entryPrice') or 0)
-                        self.status_data['liquidation_price'] = float(pos.get('liquidationPrice') or 0)
-                        self.status_data['unrealized_pnl'] = float(pos.get('unrealizedPnl') or 0)
-                        found_pos = True
-                        break
-                if not found_pos: self.status_data['current_pos'] = 0
-
-                balance = self.exchange.fetch_balance()
-                quote_currency = self.config['symbol'].split('/')[1] 
-                self.status_data['wallet_balance'] = float(balance.get(quote_currency, {}).get('total', 0))
-            except Exception as e:
-                pass
-        else:
-            self.sim_calculate_pnl()
+            # 2. 获取余额
+            balance = self.exchange.fetch_balance()
+            quote_currency = self.config['symbol'].split('/')[1] 
+            self.status_data['wallet_balance'] = float(balance.get(quote_currency, {}).get('total', 0))
+            
+            self.last_sync_time = time.time() # 更新同步时间戳
+            
+        except Exception as e:
+            self.log(f"[数据同步失败] {e}")
 
     def sim_calculate_pnl(self):
         try:
@@ -162,7 +166,6 @@ class FutureGridBot:
                 self.status_data['liquidation_price'] = 0
         except: pass
 
-    # 风控检查函数
     def check_risk_management(self):
         current_price = self.status_data['last_price']
         if current_price <= 0: return False
@@ -171,7 +174,6 @@ class FutureGridBot:
         take_profit = self.config.get('take_profit')
         mode = self.config.get('strategy_type', 'neutral')
 
-        # 1. 检查止损
         if stop_loss and str(stop_loss).strip():
             sl_price = float(stop_loss)
             triggered = False
@@ -185,7 +187,6 @@ class FutureGridBot:
                 self.stop()
                 return True
 
-        # 2. 检查止盈
         if take_profit and str(take_profit).strip():
             tp_price = float(take_profit)
             triggered = False
@@ -200,20 +201,21 @@ class FutureGridBot:
                 return True
         return False
 
-    def calculate_target_position(self):
-        current_price = self.status_data['last_price']
-        if current_price == 0: return 0, -1
-
+    def calculate_grid_index(self, price):
+        """仅计算网格索引，不更新状态"""
+        if price == 0: return -1
         grid_idx = -1
         for i, p in enumerate(self.grids):
-            if current_price >= p: grid_idx = i
+            if price >= p: grid_idx = i
             else: break
         
-        self.status_data['current_grid_idx'] = grid_idx
-        
+        # 边界处理
         if grid_idx < 0: grid_idx = 0 
         if grid_idx >= len(self.grids): grid_idx = len(self.grids) - 1 
+        return grid_idx
 
+    def calculate_target_position(self, grid_idx):
+        """根据网格索引计算目标仓位"""
         mode = self.config.get('strategy_type', 'neutral')
         amount_per_grid = float(self.config['amount'])
         total_grids = len(self.grids) - 1
@@ -234,7 +236,18 @@ class FutureGridBot:
             diff_grids = mid_idx - grid_idx
             target_pos = diff_grids * amount_per_grid
 
-        return target_pos, grid_idx
+        return target_pos
+
+    def _to_precision(self, price=None, amount=None):
+        if not self.exchange: return str(price) if price else str(amount)
+        try:
+            if price is not None:
+                return self.exchange.price_to_precision(self.market_symbol, price)
+            if amount is not None:
+                return self.exchange.amount_to_precision(self.market_symbol, amount)
+        except:
+            pass
+        return str(price) if price else str(amount)
 
     def adjust_position(self, target_pos):
         current_pos = self.status_data['current_pos']
@@ -248,6 +261,7 @@ class FutureGridBot:
         side = 'buy' if diff > 0 else 'sell'
         qty = abs(diff)
         
+        # --- 模拟环境 ---
         if not self.exchange.apiKey:
             self.log(f"[模拟纠偏] 目标{target_pos:.4f} 实持{current_pos:.4f} -> 市价{side} {qty:.4f}")
             self.status_data['current_pos'] += diff
@@ -255,45 +269,42 @@ class FutureGridBot:
                 self.status_data['entry_price'] = self.status_data['last_price']
             return
 
+        # --- 实盘环境 (IOC 限价单) ---
         try:
             self.log(f"[系统纠偏] 偏离检测! 正在{side} {qty:.4f}")
             
-            order = self.exchange.create_order(self.market_symbol, 'market', side, qty)
-            
-            filled = order.get('filled')
-            if filled is None:
-                filled = float(order.get('amount', qty))
+            ticker = self.exchange.fetch_ticker(self.market_symbol)
+            if side == 'buy':
+                limit_price = float(ticker['ask']) * 1.01
             else:
-                filled = float(filled)
-            
-            self.log(f"[成交确认] 订单已提交，成交量: {filled}")
+                limit_price = float(ticker['bid']) * 0.99
 
-            max_retries = 8
-            synced = False
-            for i in range(max_retries):
-                time.sleep(1.5)
-                self.fetch_market_data()
-                
-                new_pos = self.status_data['current_pos']
-                if abs(new_pos - target_pos) < (amount_per_grid * 0.5):
-                    self.log(f"[同步成功] 持仓已更新为 {new_pos}")
-                    synced = True
-                    break
-                else:
-                    self.log(f"[数据延迟] 交易所显示 {new_pos} (目标 {target_pos})，重试 {i+1}...")
+            price_str = self._to_precision(price=limit_price)
+            qty_str = self._to_precision(amount=qty)
+            params = {'timeInForce': 'IOC'} 
             
-            if not synced:
-                self.log(f"[警告] 交易所数据同步超时，暂缓操作")
+            order = self.exchange.create_order(
+                symbol=self.market_symbol, 
+                type='limit', side=side, amount=qty_str, price=price_str, params=params
+            )
+            
+            filled = float(order.get('filled', 0))
+            if filled > 0:
+                self.log(f"[成交确认] IOC订单成交，数量: {filled}")
+                self.force_sync = True # 下单成功后，标记下次需要强制同步
+            else:
+                self.log(f"[未成交] IOC订单被取消")
 
         except Exception as e:
             err_msg = str(e).lower()
             if "insufficient" in err_msg or "margin" in err_msg:
-                self.log(f"[严重错误] 交易所提示保证金不足！策略急停。")
+                self.log(f"[严重错误] 保证金不足！策略急停。")
                 self.stop() 
             else:
                 self.log(f"[纠偏失败] {e}")
 
     def manage_maker_orders(self, current_grid_idx):
+        """【Phase 2 & 3】智能差分挂单 (Diff) + 缓存复用"""
         if not self.exchange.apiKey: 
             self.update_orders_display(current_grid_idx)
             return
@@ -302,169 +313,226 @@ class FutureGridBot:
             active_limit = int(self.config.get('active_order_limit', 5))
             amount = float(self.config['amount'])
             
-            buy_indices = []
-            sell_indices = []
-
-            for i in range(current_grid_idx - 1, current_grid_idx - 1 - active_limit, -1):
-                if i >= 0: buy_indices.append(i)
+            buy_indices = [i for i in range(current_grid_idx - 1, current_grid_idx - 1 - active_limit, -1) if i >= 0]
+            sell_indices = [i for i in range(current_grid_idx + 1, current_grid_idx + 1 + active_limit) if i < len(self.grids)]
             
-            for i in range(current_grid_idx + 1, current_grid_idx + 1 + active_limit):
-                if i < len(self.grids): sell_indices.append(i)
-
+            target_buy_prices = {self.grids[i] for i in buy_indices}
+            target_sell_prices = {self.grids[i] for i in sell_indices}
+            
+            # Fetch Open Orders (消耗 API 权重)
             open_orders = self.exchange.fetch_open_orders(self.market_symbol)
             
-            wanted_prices = set([self.grids[i] for i in buy_indices + sell_indices])
-            kept_prices = set()
-            
+            to_cancel_ids = []
+            active_buy_prices = set()
+            active_sell_prices = set()
+
             for order in open_orders:
                 price = float(order['price'])
-                is_wanted = False
-                matched_wanted = None
-                for wp in wanted_prices:
-                    if abs(price - wp) < (wp * 0.0001):
-                        matched_wanted = wp
-                        is_wanted = True
-                        break
+                oid = order['id']
+                side = order['side']
+                is_valid = False
                 
-                should_cancel = False
-                if not is_wanted: should_cancel = True
-                elif matched_wanted in kept_prices: should_cancel = True
+                if side == 'buy':
+                    for tp in target_buy_prices:
+                        if abs(price - tp) < (tp * 0.0001):
+                            active_buy_prices.add(tp)
+                            is_valid = True
+                            break
+                elif side == 'sell':
+                    for tp in target_sell_prices:
+                        if abs(price - tp) < (tp * 0.0001):
+                            active_sell_prices.add(tp)
+                            is_valid = True
+                            break
                 
-                if should_cancel:
-                    try:
-                        self.exchange.cancel_order(order['id'], self.market_symbol)
-                    except: pass
-                else:
-                    if matched_wanted: kept_prices.add(matched_wanted)
+                if not is_valid: to_cancel_ids.append(oid)
             
+            to_create_specs = [] 
             for idx in buy_indices:
-                price = self.grids[idx]
-                already_exists = False
-                for kp in kept_prices:
-                    if abs(kp - price) < (price * 0.0001):
-                        already_exists = True
-                        break
-                if not already_exists:
-                    try: self.exchange.create_order(self.market_symbol, 'limit', 'buy', amount, price)
-                    except Exception as e: pass 
-            
+                p = self.grids[idx]
+                if p not in active_buy_prices: to_create_specs.append(('buy', p))
             for idx in sell_indices:
-                price = self.grids[idx]
-                already_exists = False
-                for kp in kept_prices:
-                    if abs(kp - price) < (price * 0.0001):
-                        already_exists = True
-                        break
-                if not already_exists:
-                    try: self.exchange.create_order(self.market_symbol, 'limit', 'sell', amount, price)
-                    except Exception as e: pass
+                p = self.grids[idx]
+                if p not in active_sell_prices: to_create_specs.append(('sell', p))
+
+            # 执行逻辑
+            def exec_cancel(order_ids):
+                for oid in order_ids:
+                    try:
+                        self.exchange.cancel_order(oid, self.market_symbol)
+                        time.sleep(0.05)
+                    except: pass
+
+            def exec_create(specs):
+                created = False
+                for side, price in specs:
+                    try:
+                        price_str = self._to_precision(price=price)
+                        amt_str = self._to_precision(amount=amount)
+                        self.exchange.create_order(self.market_symbol, 'limit', side, amt_str, price_str)
+                        time.sleep(0.05)
+                        created = True
+                    except Exception as e:
+                        raise e
+                return created
+
+            try:
+                # 优先补单
+                if to_create_specs: 
+                    if exec_create(to_create_specs):
+                        self.force_sync = True # 挂单变动，下次强制同步
+
+                if to_cancel_ids: 
+                    exec_cancel(to_cancel_ids)
+                    
+            except Exception as e:
+                if "insufficient" in str(e).lower() or "margin" in str(e).lower():
+                    self.log(f"[资金优化] 保证金紧张，执行先撤后补...")
+                    if to_cancel_ids: exec_cancel(to_cancel_ids)
+                else:
+                    self.log(f"[挂单异常] {e}")
 
             self.update_orders_display(current_grid_idx)
             
         except Exception as e:
-            self.log(f"[挂单维护出错] {e}")
+            self.log(f"[挂单维护崩溃] {e}")
 
     def update_orders_display(self, current_idx):
         orders = []
-        amount = self.config['amount']
-        active_limit = int(self.config.get('active_order_limit', 5))
-        
-        for i in range(len(self.grids)-1, -1, -1):
-            price = self.grids[i]
-            order_type = "---"
-            style = "text-muted"
+        try:
+            amount = self.config['amount']
+            active_limit = int(self.config.get('active_order_limit', 5))
             
-            if i == current_idx:
-                style = "text-warning bg-dark border border-warning"
-                order_type = "⚡ 现价 ⚡"
-            elif i > current_idx and i <= current_idx + active_limit:
-                order_type = "SELL (挂单)"
-                style = "text-danger"
-            elif i < current_idx and i >= current_idx - active_limit:
-                order_type = "BUY (挂单)"
-                style = "text-success"
+            for i in range(len(self.grids)-1, -1, -1):
+                price = self.grids[i]
+                order_type = "---"
+                style = "text-muted"
                 
-            orders.append({"idx": i, "price": price, "type": order_type, "amt": amount, "style": style})
-        self.status_data['grid_orders'] = orders
+                if i == current_idx:
+                    style = "text-warning bg-dark border border-warning"
+                    order_type = "⚡ 现价 ⚡"
+                elif i > current_idx and i <= current_idx + active_limit:
+                    order_type = "SELL (挂单)"
+                    style = "text-danger"
+                elif i < current_idx and i >= current_idx - active_limit:
+                    order_type = "BUY (挂单)"
+                    style = "text-success"
+                    
+                orders.append({
+                    "idx": i, "price": price, "type": order_type, "amt": amount, "style": style
+                })
+            
+            self.status_data['orders'] = orders 
+        except Exception as e:
+            self.log(f"[显示更新错误] {e}")
 
     def run_step(self, current_price):
+        """
+        【Phase 3】高性能事件驱动引擎
+        """
         if not self.running: return
         self.status_data['last_price'] = current_price
         
-        # --- 【新增】暂停拦截逻辑 ---
-        if self.paused:
-            return 
-        # ---------------------------
+        if self.paused: return 
         
+        # 1. 模拟模式下：不等待心跳，直接计算（保证模拟盘流畅）
         if not self.exchange.apiKey:
             self.sim_calculate_pnl()
+            idx = self.calculate_grid_index(current_price)
+            target_pos = self.calculate_target_position(idx)
+            self.adjust_position(target_pos)
+            self.update_orders_display(idx)
+            return
+
+        # 2. 极速风控
+        if self.check_risk_management(): return
 
         now = time.time()
-        if now - self.last_update_time < 5:
-            return
         
-        self.last_update_time = now 
+        # 3. 计算当前网格位置
+        new_grid_idx = self.calculate_grid_index(current_price)
+        self.status_data['current_grid_idx'] = new_grid_idx
         
-        self.fetch_market_data()
+        # 4. 判断触发条件
+        should_sync = False
         
-        # 风控检查
-        if self.check_risk_management():
-            return
+        if self.force_sync:
+            should_sync = True
+        elif new_grid_idx != self.last_grid_idx:
+            should_sync = True
+        elif (now - self.last_sync_time) > self.sync_interval:
+            should_sync = True
+
+        # 5. 执行同步与交易
+        if should_sync:
+            # A. 同步账户
+            self.sync_account_data()
             
-        target_pos, grid_idx = self.calculate_target_position()
-        self.adjust_position(target_pos)
-        self.manage_maker_orders(grid_idx)
+            # B. 计算目标并调整
+            target_pos = self.calculate_target_position(new_grid_idx)
+            self.adjust_position(target_pos)
+            
+            # C. 维护挂单
+            self.manage_maker_orders(new_grid_idx)
+            
+            # D. 更新状态
+            self.last_grid_idx = new_grid_idx
+            self.last_sync_time = now
+            self.force_sync = False
 
     def start(self):
         if self.init_exchange() and self.setup_account() and self.generate_grids():
             self.running = True
-            self.paused = False # 确保启动时不是暂停状态
-            mode = self.config.get('strategy_type')
-            self.log(f"[合约] 策略启动 (Hard Core v7.7) | 模式: {mode}")
+            self.paused = False
+            self.force_sync = True 
+            self.last_grid_idx = -1
             
-            self.last_update_time = 0 
-            self.run_step(self.status_data.get('last_price', 0))
+            # 【核心修复】立刻执行一次初始渲染，解决挂单墙空白问题
+            try:
+                ticker = self.exchange.fetch_ticker(self.market_symbol)
+                price = float(ticker['last'])
+                self.status_data['last_price'] = price
+                # 计算初始网格并渲染
+                idx = self.calculate_grid_index(price)
+                self.update_orders_display(idx)
+                self.log(f"[系统] 初始挂单墙已生成，当前价: {price}")
+            except Exception as e:
+                # 如果获取失败（如网络问题），也渲染一个默认的空白网格
+                self.log(f"[警告] 初始价格获取延迟: {e}")
+                self.update_orders_display(-1)
+            
+            mode = self.config.get('strategy_type')
+            self.log(f"[合约] 策略启动 (Phase 3 Engine) | 模式: {mode}")
         else:
             self.running = False
 
-    # 【新增】暂停方法
     def pause(self):
-        """暂停：保留持仓，仅撤销挂单"""
         self.paused = True
-        self.log("[指令] 策略已暂停！(持仓保留，挂单撤销)")
-        
+        self.log("[指令] 策略已暂停！")
         if self.exchange.apiKey:
             try:
                 open_orders = self.exchange.fetch_open_orders(self.market_symbol)
                 for order in open_orders:
-                    try:
-                        self.exchange.cancel_order(order['id'], self.market_symbol)
+                    try: self.exchange.cancel_order(order['id'], self.market_symbol)
                     except: pass
-                self.log("[系统] 挂单已全部撤销，等待恢复...")
-            except Exception as e:
-                self.log(f"[暂停撤单失败] {e}")
+                self.log("[系统] 挂单已全部撤销")
+            except Exception as e: self.log(f"[暂停撤单失败] {e}")
 
-    # 【新增】恢复方法
     def resume(self):
-        """恢复：继续运行"""
         self.paused = False
-        self.log("[指令] 策略恢复运行！正在重新计算网格...")
-        # 下一次 run_step 会自动处理补单和挂单
+        self.force_sync = True # 恢复时强制同步
+        self.log("[指令] 策略恢复运行！")
 
     def stop(self):
         self.log("[指令] 正在停止... 撤单并平仓")
         self.running = False 
         self.paused = False
-        
         if self.exchange.apiKey:
             try:
-                self.log("[停止] 正在逐个撤销挂单...")
                 open_orders = self.exchange.fetch_open_orders(self.market_symbol)
                 for order in open_orders:
-                    try:
-                        self.exchange.cancel_order(order['id'], self.market_symbol)
+                    try: self.exchange.cancel_order(order['id'], self.market_symbol)
                     except: pass
-                self.log("[停止] 挂单已清理")
                 
                 positions = self.exchange.fetch_positions([self.market_symbol])
                 for pos in positions:
@@ -474,8 +542,7 @@ class FutureGridBot:
                             side = 'sell' if amt > 0 else 'buy'
                             self.exchange.create_order(self.market_symbol, 'market', side, abs(amt))
                             self.log(f"[系统] 已平仓 {amt}")
-            except Exception as e:
-                self.log(f"[停止过程出错] {e}")
+            except Exception as e: self.log(f"[停止过程出错] {e}")
         else:
             self.status_data['current_pos'] = 0
             self.log("[模拟] 已重置虚拟持仓")

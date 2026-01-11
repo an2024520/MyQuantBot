@@ -1,0 +1,23 @@
+{
+    "running": false,
+    "paused": false,
+    "config": {
+        "strategy_type": "long",
+        "exchange_id": "okx",
+        "sim_balance": "1000",
+        "coin": "BTC",
+        "quote": "USDT",
+        "leverage": "1",
+        "api_key": "",
+        "secret": "",
+        "password": "",
+        "stop_loss": "",
+        "take_profit": "",
+        "active_order_limit": "3",
+        "lower_price": "80000",
+        "upper_price": "100000",
+        "grid_num": "50",
+        "amount": "0.01",
+        "symbol": "BTC/USDT"
+    }
+}
