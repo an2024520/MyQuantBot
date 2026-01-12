@@ -151,24 +151,44 @@ class FutureGridBot:
         except: return 0.0
 
     def sync_account_data(self):
+        """同步账户数据：包含持仓详情与费率 (增加空值校验)"""
         if not self.running or not self.exchange.apiKey: return
 
         try:
+            # 1. 获取持仓与账户信息
             positions = self.exchange.fetch_positions([self.market_symbol])
             found_pos = False
+            
             for pos in positions:
                 if pos['symbol'] == self.market_symbol:
+                    # 【修复】使用 or 0 确保 None 会被转换为 0，防止 float(None) 报错
                     self.status_data['current_pos'] = self._get_position_amount(pos['info'])
                     self.status_data['entry_price'] = float(pos.get('entryPrice') or 0)
                     self.status_data['liquidation_price'] = float(pos.get('liquidationPrice') or 0)
                     self.status_data['unrealized_pnl'] = float(pos.get('unrealizedPnl') or 0)
                     found_pos = True
                     break
-            if not found_pos: self.status_data['current_pos'] = 0
+            
+            if not found_pos: 
+                self.status_data['current_pos'] = 0
+                self.status_data['entry_price'] = 0
+                self.status_data['liquidation_price'] = 0
+                self.status_data['unrealized_pnl'] = 0
 
+            # 2. 获取余额
             balance = self.exchange.fetch_balance()
             quote_currency = self.config['symbol'].split('/')[1] 
-            self.status_data['wallet_balance'] = float(balance.get(quote_currency, {}).get('total', 0))
+            if quote_currency in balance:
+                self.status_data['wallet_balance'] = float(balance[quote_currency].get('total', 0) or 0)
+            elif 'total' in balance and quote_currency in balance['total']:
+                self.status_data['wallet_balance'] = float(balance['total'][quote_currency] or 0)
+
+            # 3. 获取资金费率
+            try:
+                funding_info = self.exchange.fetch_funding_rate(self.market_symbol)
+                self.status_data['funding_rate'] = float(funding_info.get('fundingRate', 0) or 0)
+            except:
+                pass 
             
             self.last_sync_time = time.time() 
             
@@ -275,6 +295,7 @@ class FutureGridBot:
         return str(price) if price else str(amount)
 
     def adjust_position(self, target_pos):
+        """【补丁修正】增加空值校验，并强制打破重试循环"""
         current_pos = self.status_data['current_pos']
         amount_per_grid = float(self.config['amount'])
         
@@ -299,12 +320,14 @@ class FutureGridBot:
             self.log(f"[系统纠偏] 偏离检测! 正在{side} {qty:.4f}")
             
             ticker = self.exchange.fetch_ticker(self.market_symbol)
+            # 【修复】增加对 ticker 中 ask/bid 为 None 的防御
+            # 如果 ask 缺失，尝试用 last 价格兜底，防止 float(None) 报错
             if side == 'buy':
-                # 【修正】将滑点保护从 1% 降低到 0.2%，防止触发 OKX 价格限制 (Order price limit)
-                limit_price = float(ticker['ask']) * 1.002
+                base_price = float(ticker.get('ask') or ticker.get('last'))
+                limit_price = base_price * 1.002
             else:
-                # 【修正】将滑点保护从 1% 降低到 0.2%
-                limit_price = float(ticker['bid']) * 0.998
+                base_price = float(ticker.get('bid') or ticker.get('last'))
+                limit_price = base_price * 0.998
 
             price_str = self._to_precision(price=limit_price)
             qty_str = self._to_precision(amount=qty)
@@ -318,9 +341,14 @@ class FutureGridBot:
             filled = float(order.get('filled', 0))
             if filled > 0:
                 self.log(f"[成交确认] IOC订单成交，数量: {filled}")
-                self.force_sync = True 
+                time.sleep(0.5) 
+                self.sync_account_data()
             else:
                 self.log(f"[未成交] IOC订单被取消")
+
+            # 【核心修复】无论成交与否，只要尝试过了，就关闭强制同步
+            # 这打破了“报错->重试”的死循环，防止卡死 Monitor 线程
+            self.force_sync = False 
 
         except Exception as e:
             err_msg = str(e).lower()
@@ -329,6 +357,8 @@ class FutureGridBot:
                 self.stop() 
             else:
                 self.log(f"[纠偏失败] {e}")
+                # 【核心修复】即使报错，也要关闭强制同步，等待下一次心跳或网格跨越再重试
+                self.force_sync = False 
 
     def manage_maker_orders(self, current_grid_idx):
         if not self.exchange.apiKey: 
@@ -486,7 +516,8 @@ class FutureGridBot:
             
             self.last_grid_idx = new_grid_idx
             self.last_sync_time = now
-            self.force_sync = False
+            # 注意：force_sync = False 已移动到 adjust_position 内部
+            # 这样确保了无论是成功还是失败，都会关闭标志位，防止死循环
 
     def start(self):
         if self.init_exchange() and self.setup_account() and self.generate_grids():
@@ -510,7 +541,6 @@ class FutureGridBot:
             mode = self.config.get('strategy_type')
             self.log(f"[合约] 策略启动 (Phase 3 Engine) | 模式: {mode}")
 
-            # 启动即执行
             if start_price > 0:
                 self.log("[系统] 正在执行首单建仓...")
                 self.run_step(start_price)
