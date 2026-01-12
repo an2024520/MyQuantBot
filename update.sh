@@ -36,3 +36,4 @@ echo "=========================================="
 echo "✅ 更新完成！服务已重启。"
 echo "📜 查看日志: journalctl -u $SERVICE_NAME -f"
 echo "=========================================="
+chmod +x /opt/MyQuantBot/update.sh
