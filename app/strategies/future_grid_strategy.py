@@ -18,28 +18,31 @@ class FutureGridBot:
         self.market_symbol = None 
         
         # --- Phase 3: 智能轮询状态机 ---
-        self.last_sync_time = 0      # 上次同步账户的时间
-        self.last_grid_idx = -1      # 上次计算所在的网格索引
-        self.force_sync = True       # 强制同步标志位
-        self.sync_interval = 15      # 账户同步心跳 (秒)
+        self.last_sync_time = 0
+        self.last_grid_idx = -1
+        self.force_sync = True
+        self.sync_interval = 15
         # -----------------------------
         
-        # 前端交互的核心数据结构
+        # 前端交互的核心数据结构（键名严格匹配前端）
         self.status_data = {
             "current_grid_idx": -1,
             "profit": 0,           
             "orders": [],          
             "liquidation_price": 0, 
+            "liquidation": 0,       # 兼容前端 liq-price 显示
             "unrealized_pnl": 0,    
-            "funding_rate": 0,      
+            "funding_rate": 0,      # 存储百分比数值，如 0.0100 表示 0.0100%
             "current_pos": 0,       
             "entry_price": 0,       
-            "last_price": 0,        
+            "last_price": 0,
+            "current_price": 0,     # 兼容前端 cur-price 显示
             "wallet_balance": 0,
-            "status": "offline"      # 新增：offline / initializing / running / paused / error
+            "running": False,
+            "paused": False
         }
 
-        # 新增：后台运行线程
+        # 后台运行线程
         self.worker_thread = None
 
     def init_exchange(self):
@@ -47,12 +50,10 @@ class FutureGridBot:
             exchange_id = self.config.get('exchange_id', 'binance')
             exchange_class = getattr(ccxt, exchange_id)
             
-            # 1. 尝试从前端配置读取
             api_key = self.config.get('api_key', '')
             secret = self.config.get('secret', '')
             password = self.config.get('password', '')
 
-            # 2. 从外部绝对路径加载密钥舱 (GitHub 脱敏)
             EXTERNAL_SECRETS_PATH = "/opt/myquant_config/secrets.py"
             
             if not api_key:
@@ -72,7 +73,6 @@ class FutureGridBot:
                     except Exception as e:
                         self.log(f"[系统] 外部密钥加载失败: {e}")
 
-            # 3. 构造交易所参数
             params = {
                 'apiKey': api_key,
                 'secret': secret,
@@ -119,9 +119,9 @@ class FutureGridBot:
                 return True
 
             leverage = int(self.config.get('leverage', 1))
-            try: self.exchange.fapiPrivate_post_leverage({'symbol': self.market_symbol.replace('/', ''), 'leverage': leverage})
+            try: self.exchange.set_leverage(leverage, self.market_symbol)
             except: pass 
-            try: self.exchange.fapiPrivate_post_positionSide_dual({'dualSidePosition': False})
+            try: self.exchange.set_position_mode(hedged=False, symbol=self.market_symbol)
             except: pass
             return True
         except Exception as e:
@@ -180,15 +180,29 @@ class FutureGridBot:
             quote_currency = self.config['symbol'].split('/')[1] 
             if quote_currency in balance['total']:
                 self.status_data['wallet_balance'] = float(balance['total'].get(quote_currency, 0))
-            else:
-                self.status_data['wallet_balance'] = 0
 
             try:
                 funding_info = self.exchange.fetch_funding_rate(self.market_symbol)
-                self.status_data['funding_rate'] = float(funding_info.get('fundingRate', 0) or 0)
+                raw_rate = float(funding_info.get('fundingRate', 0) or 0)
+                self.status_data['funding_rate'] = round(raw_rate * 100, 4)
             except:
-                pass 
+                self.status_data['funding_rate'] = 0
             
+            self.status_data['liquidation'] = self.status_data['liquidation_price']
+
+            if self.status_data['current_pos'] != 0 and self.status_data['entry_price'] > 0:
+                if self.status_data['liquidation_price'] <= 0:
+                    leverage = int(self.config.get('leverage', 1))
+                    entry = self.status_data['entry_price']
+                    if self.status_data['current_pos'] > 0:
+                        liq = entry * (1 - 1/leverage + 0.005)
+                    else:
+                        liq = entry * (1 + 1/leverage - 0.005)
+                    liq = round(liq, 4 if entry > 1 else 2)
+                    self.status_data['liquidation_price'] = liq
+                    self.status_data['liquidation'] = liq
+                    self.log(f"[风控] API强平价无效，手动计算 ≈ {liq}")
+
             self.last_sync_time = time.time() 
             
         except Exception as e:
@@ -211,6 +225,8 @@ class FutureGridBot:
             else:
                 self.status_data['unrealized_pnl'] = 0
                 self.status_data['liquidation_price'] = 0
+
+            self.status_data['liquidation'] = self.status_data['liquidation_price']
         except: pass
 
     def check_risk_management(self):
@@ -473,14 +489,14 @@ class FutureGridBot:
 
     def run_step(self, current_price):
         if not self.running: return
+        
         self.status_data['last_price'] = current_price
+        self.status_data['current_price'] = current_price
+        self.status_data['running'] = True
+        self.status_data['paused'] = self.paused
         
-        if self.paused: 
-            self.status_data['status'] = "paused"
-            return 
+        if self.paused: return 
         
-        self.status_data['status'] = "running"
-
         if not self.exchange.apiKey:
             self.sim_calculate_pnl()
             idx = self.calculate_grid_index(current_price)
@@ -514,7 +530,6 @@ class FutureGridBot:
             self.last_sync_time = now
 
     def _main_loop(self):
-        """主运行循环（初始化成功后进入）"""
         while self.running:
             if self.paused:
                 time.sleep(1)
@@ -529,8 +544,8 @@ class FutureGridBot:
                         current_price = float(ticker['last'])
                     except Exception as e:
                         self.log(f"[价格获取失败] {e}，使用上次价格继续")
+
                 else:
-                    # 模拟模式波动
                     fluctuation = random.uniform(-0.005, 0.005)
                     current_price *= (1 + fluctuation)
                     if current_price > 100:
@@ -549,8 +564,6 @@ class FutureGridBot:
             time.sleep(1)
 
     def _initialize_and_run(self):
-        """后台线程：完成所有初始化 + 主循环"""
-        self.status_data['status'] = "initializing"
         self.log("[系统] 正在后台初始化交易所、账户和网格...")
 
         try:
@@ -561,7 +574,6 @@ class FutureGridBot:
             if not self.generate_grids():
                 raise Exception("网格生成失败")
 
-            # 初始化价格
             start_price = 0
             try:
                 if self.exchange and self.exchange.apiKey:
@@ -570,6 +582,7 @@ class FutureGridBot:
                 else:
                     start_price = sum(self.grids) / len(self.grids)
                 self.status_data['last_price'] = start_price
+                self.status_data['current_price'] = start_price
 
                 idx = self.calculate_grid_index(start_price)
                 self.update_orders_display(idx)
@@ -581,21 +594,17 @@ class FutureGridBot:
             mode = self.config.get('strategy_type', 'neutral')
             self.log(f"[合约] 策略初始化完成 (Phase 3 Engine) | 模式: {mode}")
 
-            # 首步建仓
             if start_price > 0:
                 self.log("[系统] 执行首单建仓...")
                 self.run_step(start_price)
 
-            # 进入主循环
             self._main_loop()
 
         except Exception as e:
             self.log(f"[初始化严重错误] {e}，策略无法启动")
             self.running = False
-            self.status_data['status'] = "error"
 
     def start(self):
-        """非阻塞启动：仅启动后台线程，立即返回"""
         if self.running:
             self.log("[警告] 策略已在运行中")
             return
@@ -632,7 +641,6 @@ class FutureGridBot:
         self.log("[指令] 正在停止... 撤单并平仓")
         self.running = False 
         self.paused = False
-        self.status_data['status'] = "offline"
 
         if self.worker_thread and self.worker_thread.is_alive():
             self.worker_thread.join(timeout=15)
