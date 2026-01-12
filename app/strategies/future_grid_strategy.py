@@ -313,26 +313,39 @@ class FutureGridBot:
         current_pos = self.status_data['current_pos']
         amount_per_grid = float(self.config['amount'])
         
-        diff = target_pos - current_pos
+        # === 核心修正：基于网格单位的整倍数计算 (Integer Quantization) ===
+        # 1. 计算原始浮点偏差
+        raw_diff = target_pos - current_pos
         
-        if abs(diff) < (amount_per_grid * 0.8):
+        # 2. 计算缺失的“完整格子数” (四舍五入)
+        # 这里的 amount_per_grid 就是你设置的通用最小单位 (如 0.01 或 0.002)
+        # 0.0099 -> 1格;  0.004 -> 0格;  0.021 -> 2格
+        missing_grids = round(raw_diff / amount_per_grid)
+        
+        # 3. 完美防抖：如果偏差不足半个格子，round后为0，直接跳过
+        if missing_grids == 0:
             return
 
-        side = 'buy' if diff > 0 else 'sell'
-        qty = abs(diff)
+        # 4. 重构下单数量：必须是 config['amount'] 的整数倍
+        side = 'buy' if missing_grids > 0 else 'sell'
+        qty = abs(missing_grids) * amount_per_grid
         
+        # ==========================================================
+
         if not self.exchange.apiKey:
-            self.log(f"[模拟纠偏] 目标{target_pos:.4f} 实持{current_pos:.4f} -> 市价{side} {qty:.4f}")
-            self.status_data['current_pos'] += diff
+            self.log(f"[模拟纠偏] 目标{target_pos:.4f} 实持{current_pos:.4f} -> 修正{abs(missing_grids)}格 -> 市价{side} {qty:.4f}")
+            self.status_data['current_pos'] += (missing_grids * amount_per_grid)
             if self.status_data['current_pos'] != 0:
                 self.status_data['entry_price'] = self.status_data['last_price']
             return
 
         try:
-            self.log(f"[系统纠偏] 偏离检测! 正在市价{side} {qty:.4f}")
+            self.log(f"[系统纠偏] 偏差{raw_diff:.4f} -> 修正{abs(missing_grids)}格 -> 正在市价{side} {qty:.4f}")
             
             qty_str = self._to_precision(amount=qty)
             
+            # 回归最简模式：使用市价单 (Market)
+            # 只要 qty 是 0.01 的标准倍数，OKX 市价单是可以成交的
             order = self.exchange.create_order(
                 symbol=self.market_symbol,
                 type='market',
@@ -340,20 +353,20 @@ class FutureGridBot:
                 amount=qty_str
             )
 
-            # 新增：通过fetch_order获取准确filled
+            # 保持双重确认逻辑，确保数据准确
             order_id = order['id']
-            time.sleep(0.5)  # 等待成交上链
+            time.sleep(0.5) 
             full_order = self.exchange.fetch_order(order_id, self.market_symbol)
-            filled = float(full_order.get('filled', 0))  # 兜底0更安全
+            filled = float(full_order.get('filled', 0))
             
             if filled > 0:
-                self.log(f"[成交确认] 市价订单成交，数量: {filled:.4f}")
+                self.log(f"[成交确认] 纠偏成功，数量: {filled:.4f}")
                 time.sleep(0.5)
                 self.sync_account_data()
             else:
-                self.log(f"[未成交] 市价订单未成交或API数据获取异常（异常情况）")
+                self.log(f"[未成交] 市价单未立即返回成交量，等待同步")
 
-            self.force_sync = True
+            self.force_sync = True 
 
         except Exception as e:
             err_msg = str(e).lower()
