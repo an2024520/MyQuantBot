@@ -395,41 +395,39 @@ class FutureGridBot:
             active_limit = int(self.config.get('active_order_limit', 5))
             amount = float(self.config['amount'])
             
-            # === Maker Centric v4: 最终修正版 ===
+            # === Maker Centric V5: 严格网格纪律 (User Defined) ===
             mode = self.config.get('strategy_type', 'neutral')
             
-            # 默认偏移
+            # 默认值
             buy_start_offset = -1
             sell_start_offset = 1
             
             if mode == 'long':
-                # Long 模式
-                # 买单: -1 (退守一格，90855时挂90400，防止90800反复磨损)
-                # 卖单: 1  (正常挂在当前格顶部，90855时挂91200，不应该跳过)
-                buy_start_offset = -1
-                sell_start_offset = 1  # 修正：从2改为1，找回消失的91200卖单
+                # Long 模式 (根据您的要求)
+                # 场景：91350 (Idx 91200)。
+                # 买1 = 91200 (Idx + 0)
+                # 卖1 = 92000 (Idx + 2)
+                # 结果：[91200 Buy] ... [91600 空] ... [92000 Sell]
+                buy_start_offset = 0
+                sell_start_offset = 2
 
             elif mode == 'short':
-                # Short 模式
-                # 买单: -1 (正常挂在当前格底部，90855时挂90400)
-                # 卖单: 1  (注意：Short模式下90800是开仓位，90855时应退守一格挂91200)
-                # 修正：做空时，当前格是90800-91200。
-                # 如果在90800反复磨损，卖单应该退守到91200。
-                # 之前代码 buy=-2, sell=1。
-                # 90855时(idx=N)，Sell=N+1=91200。Buy=N-2=90000? 
-                # 应该对称：Buy=90400(N-1), Sell=91200(N+1).
+                # Short 模式 (对称逻辑)
+                # 场景：91350 (Idx 91200)。
+                # 卖1 = 91600 (Idx + 1) -> 紧贴当前格顶部开空
+                # 买1 = 90800 (Idx - 1) -> 隔一格平空 (91200空置)
+                # 结果：[90800 Buy] ... [91200 空] ... [91600 Sell]
                 buy_start_offset = -1
-                sell_start_offset = 2 # 做空防磨损：退守一格开空
+                sell_start_offset = 1
             
             start_buy = current_grid_idx + buy_start_offset
             start_sell = current_grid_idx + sell_start_offset
             
-            # 范围计算 (保持 V3 的正确逻辑)
+            # 动态计算结束点，确保挂单数量固定为 active_limit
             buy_indices = [i for i in range(start_buy, start_buy - active_limit, -1) if i >= 0]
             sell_indices = [i for i in range(start_sell, start_sell + active_limit) if i < len(self.grids)]
             
-            
-            # ... (后续代码保持不变)
+            # ====================================================
             
             target_buy_prices = {self.grids[i] for i in buy_indices}
             target_sell_prices = {self.grids[i] for i in sell_indices}
