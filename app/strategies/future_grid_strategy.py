@@ -395,23 +395,40 @@ class FutureGridBot:
             active_limit = int(self.config.get('active_order_limit', 5))
             amount = float(self.config['amount'])
             
-            # === 修改点 3：根据模式调整买单挂单范围 ===
+            # === 修改点：完全重构挂单偏移逻辑 (Maker Centric v2) ===
             mode = self.config.get('strategy_type', 'neutral')
             
-            # 默认买单起始偏移量：-1 (即从下一格开始买)
+            # 默认偏移 (适用于 Neutral 或传统逻辑)
+            # 买单从下一格开始(-1), 卖单从上一格开始(+1)
             buy_start_offset = -1
+            sell_start_offset = 1
             
-            # 如果是做多或中性，因为我们现在不持有当前格的货，所以必须在当前格挂买单 (兜底)
-            if mode == 'long' or mode == 'neutral':
+            if mode == 'long':
+                # Long 模式
+                # 1. 放弃当前格持仓 -> 必须在当前格挂买单兜底 (Offset 0)
+                # 2. 持仓从上一格(idx+1, 90800)开始 -> 卖单从上上格(idx+2, 91200)开始
+                #    结果：90400挂买，90800空档，91200挂卖
                 buy_start_offset = 0
+                sell_start_offset = 2
             
-            # 动态计算 range 的起始点
-            # 原代码: range(current_grid_idx - 1, ...)
-            # 新代码: 使用 buy_start_offset
+            elif mode == 'short':
+                # Short 模式
+                # 1. 放弃当前格空单 -> 必须在当前格挂卖单开空 (Offset 1, 因idx是floor, 90800是idx+1)
+                #    注意：做空时，90400(idx)的上沿是90800(idx+1)。所以卖单从+1开始是对的。
+                # 2. 持仓从下一格(idx-1, 90000)开始 -> 买单(平空)从下下格(idx-2, 89600)开始
+                #    结果：89600挂买，90000空档，90800挂卖
+                buy_start_offset = -2
+                sell_start_offset = 1
+            
+            # 计算起始索引
             start_buy = current_grid_idx + buy_start_offset
+            start_sell = current_grid_idx + sell_start_offset
             
+            # 生成挂单索引列表
             buy_indices = [i for i in range(start_buy, current_grid_idx - 1 - active_limit, -1) if i >= 0]
-            sell_indices = [i for i in range(current_grid_idx + 1, current_grid_idx + 1 + active_limit) if i < len(self.grids)]
+            sell_indices = [i for i in range(start_sell, current_grid_idx + 1 + active_limit) if i < len(self.grids)]
+            
+            # ====================================================
             
             target_buy_prices = {self.grids[i] for i in buy_indices}
             target_sell_prices = {self.grids[i] for i in sell_indices}
