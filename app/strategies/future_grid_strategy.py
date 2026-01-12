@@ -1,68 +1,55 @@
-import time
-import threading
-import traceback
+# app/strategies/future_grid_strategy.py
 import ccxt
+import time
+import math
 import os
 import importlib.util
-import math
-from datetime import datetime
-import pandas as pd
-import numpy as np
-
-# 引入拆分出去的组件
-from .components.grid_math import GridMath
-from .components.order_sync import OrderSync
+import threading
+import random  # 用于模拟模式下的价格波动
 
 class FutureGridBot:
     def __init__(self, config, logger_func):
         self.config = config
         self.log = logger_func
-        self.running = False
-        self.paused = False
-        
-        # 交易所实例
         self.exchange = None
-        self.market_symbol = config['symbol']
-        
-        # 状态数据 (兼容前端)
-        self.status_data = {
-            'status': 'stopped',
-            'wallet_balance': 0.0,
-            'unrealized_pnl': 0.0,
-            'current_pos': 0.0,
-            'entry_price': 0.0,
-            'last_price': 0.0,
-            'next_grid': 0.0,
-            'grid_idx': -1,
-            'orders': []
-        }
-        
-        # 模拟模式相关
-        self.is_sim = config.get('is_sim', False)
-        self.sim_price = float(config.get('initial_price', 0))
-        self.sim_balance = float(config.get('initial_balance', 1000))
-        self.sim_pos = 0.0
-        self.sim_entry_price = 0.0
-
-        # 【组件初始化】
-        self.grid_math = GridMath(config, logger_func)
-        self.order_sync = OrderSync(None, config, logger_func)
-
-        # 兼容性保留
         self.grids = []
+        self.running = False
+        self.paused = False 
+        self.market_symbol = None 
+        
+        # --- Phase 3: 智能轮询状态机 ---
+        self.last_sync_time = 0
+        self.last_grid_idx = -1
+        self.force_sync = True
+        self.sync_interval = 15
+        # -----------------------------
+        
+        # 前端交互的核心数据结构（键名严格匹配前端）
+        self.status_data = {
+            "current_grid_idx": -1,
+            "profit": 0,           
+            "orders": [],          
+            "liquidation_price": 0, 
+            "liquidation": 0,       # 兼容前端 liq-price 显示
+            "unrealized_pnl": 0,    
+            "funding_rate": 0,      # 存储百分比数值，如 0.0100 表示 0.0100%
+            "current_pos": 0,       
+            "entry_price": 0,       
+            "last_price": 0,
+            "current_price": 0,     # 兼容前端 cur-price 显示
+            "wallet_balance": 0,
+            "running": False,
+            "paused": False
+        }
+
+        # 后台运行线程
+        self.worker_thread = None
 
     def init_exchange(self):
-        """初始化交易所连接 (完全恢复原有逻辑)"""
-        if self.is_sim:
-            self.log("[模拟模式] 启动虚拟交易所环境")
-            self.order_sync.exchange = None
-            return self.generate_grids()
-
         try:
             exchange_id = self.config.get('exchange_id', 'binance')
             exchange_class = getattr(ccxt, exchange_id)
             
-            # --- 恢复原有的密钥加载逻辑 ---
             api_key = self.config.get('api_key', '')
             secret = self.config.get('secret', '')
             password = self.config.get('password', '')
@@ -90,48 +77,229 @@ class FutureGridBot:
                 'apiKey': api_key,
                 'secret': secret,
                 'enableRateLimit': True,
-                'options': {'defaultType': 'future'} 
+                'options': {'defaultType': 'swap'}, 
+                'timeout': 30000
             }
             if password:
                 params['password'] = password
-            # ---------------------------
 
             self.exchange = exchange_class(params)
-            
-            # 尝试加载市场
             self.exchange.load_markets()
             
-            # 开启统一账户模式检查 (OKX特有)
-            if self.config['exchange_id'] == 'okx':
-                try:
-                    self.exchange.set_leverage(int(self.config['leverage']), self.market_symbol)
-                except Exception as e:
-                    self.log(f"[OKX杠杆设置警告] {e}")
-
-            self.log(f"[交易所] 连接成功: {self.config['exchange_id']}")
+            user_symbol = self.config['symbol']
+            target_base = user_symbol.split('/')[0]
+            target_quote = user_symbol.split('/')[1]
             
-            # 【关键】连接成功后，注入到 OrderSync 组件
-            self.order_sync.exchange = self.exchange
+            self.market_symbol = user_symbol
+            found = False
+            for market in self.exchange.markets.values():
+                if (market['base'] == target_base and 
+                    market['quote'] == target_quote and 
+                    market['swap']):
+                    self.market_symbol = market['symbol']
+                    found = True
+                    break
             
-            return self.generate_grids()
-            
+            if not found:
+                self.log(f"[警告] 未找到精准匹配的 {user_symbol} 合约")
+            else:
+                self.log(f"[合约] 初始化成功: {self.market_symbol}")
+                
+            return True
         except Exception as e:
-            self.log(f"[交易所连接失败] {e}")
+            self.log(f"[初始化失败] {e}")
+            return False
+
+    def setup_account(self):
+        try:
+            if not self.exchange.apiKey:
+                sim_bal = float(self.config.get('sim_balance', 1000))
+                self.status_data['wallet_balance'] = sim_bal
+                self.log(f"[模拟模式] 初始资金: {sim_bal}")
+                return True
+
+            leverage = int(self.config.get('leverage', 1))
+            try: self.exchange.set_leverage(leverage, self.market_symbol)
+            except: pass 
+            try: self.exchange.set_position_mode(hedged=False, symbol=self.market_symbol)
+            except: pass
+            return True
+        except Exception as e:
+            self.log(f"[账户设置错误] {e}")
             return False
 
     def generate_grids(self):
-        result = self.grid_math.generate_grids()
-        self.grids = self.grid_math.grids
-        return result
+        try:
+            lower = float(self.config['lower_price'])
+            upper = float(self.config['upper_price'])
+            num = int(self.config['grid_num'])
+            if num < 2: num = 2
+            
+            step = (upper - lower) / num
+            self.grids = [lower + i * step for i in range(num + 1)]
+            
+            digits = 2 if lower > 100 else (4 if lower > 1 else 6)
+            self.grids = [round(g, digits) for g in self.grids]
+            
+            self.log(f"[网格生成] 区间 {lower}-{upper}, 共 {num} 格")
+            return True
+        except Exception as e:
+            self.log(f"[参数错误] {e}")
+            return False
+
+    def _get_position_amount(self, pos_info):
+        try:
+            if 'positionAmt' in pos_info: return float(pos_info['positionAmt'])
+            if 'pos' in pos_info: return float(pos_info['pos'])
+            return 0.0
+        except: return 0.0
+
+    def sync_account_data(self):
+        if not self.running or not self.exchange.apiKey: return
+
+        try:
+            positions = self.exchange.fetch_positions([self.market_symbol])
+            found_pos = False
+            
+            for pos in positions:
+                if pos['symbol'] == self.market_symbol:
+                    self.status_data['current_pos'] = self._get_position_amount(pos['info'])
+                    self.status_data['entry_price'] = float(pos.get('entryPrice') or 0)
+                    self.status_data['liquidation_price'] = float(pos.get('liquidationPrice') or 0)
+                    self.status_data['unrealized_pnl'] = float(pos.get('unrealizedPnl') or 0)
+                    found_pos = True
+                    break
+            
+            if not found_pos: 
+                self.status_data['current_pos'] = 0
+                self.status_data['entry_price'] = 0
+                self.status_data['liquidation_price'] = 0
+                self.status_data['unrealized_pnl'] = 0
+
+            balance = self.exchange.fetch_balance()
+            quote_currency = self.config['symbol'].split('/')[1] 
+            if quote_currency in balance['total']:
+                self.status_data['wallet_balance'] = float(balance['total'].get(quote_currency, 0))
+
+            try:
+                funding_info = self.exchange.fetch_funding_rate(self.market_symbol)
+                raw_rate = float(funding_info.get('fundingRate', 0) or 0)
+                self.status_data['funding_rate'] = round(raw_rate * 100, 4)
+            except:
+                self.status_data['funding_rate'] = 0
+            
+            self.status_data['liquidation'] = self.status_data['liquidation_price']
+
+            if self.status_data['current_pos'] != 0 and self.status_data['entry_price'] > 0:
+                if self.status_data['liquidation_price'] <= 0:
+                    leverage = int(self.config.get('leverage', 1))
+                    entry = self.status_data['entry_price']
+                    if self.status_data['current_pos'] > 0:
+                        liq = entry * (1 - 1/leverage + 0.005)
+                    else:
+                        liq = entry * (1 + 1/leverage - 0.005)
+                    liq = round(liq, 4 if entry > 1 else 2)
+                    self.status_data['liquidation_price'] = liq
+                    self.status_data['liquidation'] = liq
+                    self.log(f"[风控] API强平价无效，手动计算 ≈ {liq}")
+
+            self.last_sync_time = time.time() 
+            
+        except Exception as e:
+            self.log(f"[数据同步失败] {e}")
+
+    def sim_calculate_pnl(self):
+        try:
+            entry = self.status_data.get('entry_price', 0)
+            pos = self.status_data.get('current_pos', 0)
+            last = self.status_data.get('last_price', entry)
+            leverage = int(self.config.get('leverage', 1))
+            
+            if entry > 0 and pos != 0:
+                if pos > 0: 
+                    self.status_data['unrealized_pnl'] = (last - entry) * abs(pos)
+                    self.status_data['liquidation_price'] = entry * (1 - 1/leverage + 0.005)
+                else: 
+                    self.status_data['unrealized_pnl'] = (entry - last) * abs(pos)
+                    self.status_data['liquidation_price'] = entry * (1 + 1/leverage - 0.005)
+            else:
+                self.status_data['unrealized_pnl'] = 0
+                self.status_data['liquidation_price'] = 0
+
+            self.status_data['liquidation'] = self.status_data['liquidation_price']
+        except: pass
+
+    def check_risk_management(self):
+        current_price = self.status_data['last_price']
+        if current_price <= 0: return False
+
+        stop_loss = self.config.get('stop_loss')
+        take_profit = self.config.get('take_profit')
+        mode = self.config.get('strategy_type', 'neutral')
+
+        if stop_loss and str(stop_loss).strip():
+            sl_price = float(stop_loss)
+            triggered = False
+            if mode == 'short':
+                if current_price >= sl_price: triggered = True
+            else:
+                if current_price <= sl_price: triggered = True
+            
+            if triggered:
+                self.log(f"[风控触发] 现价 {current_price} 触及止损线 {sl_price}，正在停止策略...")
+                self.stop()
+                return True
+
+        if take_profit and str(take_profit).strip():
+            tp_price = float(take_profit)
+            triggered = False
+            if mode == 'short':
+                if current_price <= tp_price: triggered = True
+            else:
+                if current_price >= tp_price: triggered = True
+            
+            if triggered:
+                self.log(f"[风控触发] 现价 {current_price} 触及止盈线 {tp_price}，正在止盈退出...")
+                self.stop()
+                return True
+        return False
 
     def calculate_grid_index(self, price):
-        return self.grid_math.calculate_grid_index(price)
+        if price == 0: return -1
+        grid_idx = -1
+        for i, p in enumerate(self.grids):
+            if price >= p: grid_idx = i
+            else: break
+        
+        if grid_idx < 0: grid_idx = 0 
+        if grid_idx >= len(self.grids): grid_idx = len(self.grids) - 1 
+        return grid_idx
 
     def calculate_target_position(self, grid_idx):
-        return self.grid_math.calculate_target_position(grid_idx)
+        mode = self.config.get('strategy_type', 'neutral')
+        amount_per_grid = float(self.config['amount'])
+        total_grids = len(self.grids) - 1
+        
+        target_pos = 0
+
+        if mode == 'long':
+            hold_grids = total_grids - grid_idx
+            if hold_grids < 0: hold_grids = 0
+            target_pos = hold_grids * amount_per_grid
+            
+        elif mode == 'short':
+            hold_grids = grid_idx
+            target_pos = -(hold_grids * amount_per_grid)
+            
+        elif mode == 'neutral':
+            mid_idx = total_grids / 2
+            diff_grids = mid_idx - grid_idx
+            target_pos = diff_grids * amount_per_grid
+
+        return target_pos
 
     def _to_precision(self, price=None, amount=None):
-        if self.is_sim: return str(price) if price else str(amount)
+        if not self.exchange: return str(price) if price else str(amount)
         try:
             if price is not None:
                 return self.exchange.price_to_precision(self.market_symbol, price)
@@ -141,179 +309,359 @@ class FutureGridBot:
             pass
         return str(price) if price else str(amount)
 
-    def get_market_price(self):
-        if self.is_sim:
-            change = (np.random.random() - 0.5) * 0.005
-            self.sim_price = self.sim_price * (1 + change)
-            return self.sim_price
+    def adjust_position(self, target_pos):
+        current_pos = self.status_data['current_pos']
+        amount_per_grid = float(self.config['amount'])
         
-        try:
-            ticker = self.exchange.fetch_ticker(self.market_symbol)
-            return float(ticker['last'])
-        except Exception as e:
-            self.log(f"[获取行情失败] {e}")
-            return 0.0
+        diff = target_pos - current_pos
+        
+        if abs(diff) < (amount_per_grid * 0.5):
+            return
 
-    def sync_account_data(self, price):
-        if self.is_sim:
-            if self.sim_pos != 0:
-                pnl = (price - self.sim_entry_price) * self.sim_pos
-                if self.sim_pos < 0:
-                    pnl = (self.sim_entry_price - price) * abs(self.sim_pos)
-            else:
-                pnl = 0
-            
-            self.status_data.update({
-                'wallet_balance': round(self.sim_balance, 2),
-                'unrealized_pnl': round(pnl, 4),
-                'current_pos': self.sim_pos,
-                'entry_price': round(self.sim_entry_price, 4),
-                'last_price': round(price, 4)
-            })
+        side = 'buy' if diff > 0 else 'sell'
+        qty = abs(diff)
+        
+        if not self.exchange.apiKey:
+            self.log(f"[模拟纠偏] 目标{target_pos:.4f} 实持{current_pos:.4f} -> 市价{side} {qty:.4f}")
+            self.status_data['current_pos'] += diff
+            if self.status_data['current_pos'] != 0:
+                self.status_data['entry_price'] = self.status_data['last_price']
             return
 
         try:
-            balance = self.exchange.fetch_balance()
-            total_wallet = balance['total'].get('USDT', 0)
+            self.log(f"[系统纠偏] 偏离检测! 正在{side} {qty:.4f}")
             
-            positions = self.exchange.fetch_positions([self.market_symbol])
-            current_pos = 0.0
-            entry_price = 0.0
-            unrealized = 0.0
+            ticker = self.exchange.fetch_ticker(self.market_symbol)
             
-            for p in positions:
-                if p['symbol'] == self.market_symbol:
-                    size = float(p.get('contracts', 0) or p.get('info', {}).get('sz', 0))
-                    if size == 0: size = float(p.get('amount', 0))
-                    
-                    side = p['side']
-                    if side == 'short': size = -size
-                    
-                    current_pos = size
-                    entry_price = float(p.get('entryPrice', 0) or 0)
-                    unrealized = float(p.get('unrealizedPnl', 0) or 0)
-                    break
+            if side == 'buy':
+                base_price = float(ticker.get('ask') or ticker.get('last') or self.status_data['last_price'])
+                limit_price = base_price * 1.002
+            else:
+                base_price = float(ticker.get('bid') or ticker.get('last') or self.status_data['last_price'])
+                limit_price = base_price * 0.998
+
+            price_str = self._to_precision(price=limit_price)
+            qty_str = self._to_precision(amount=qty)
+            params = {'timeInForce': 'IOC'} 
             
-            self.status_data.update({
-                'wallet_balance': round(total_wallet, 2),
-                'unrealized_pnl': round(unrealized, 4),
-                'current_pos': current_pos,
-                'entry_price': round(entry_price, 4),
-                'last_price': round(price, 4)
-            })
+            order = self.exchange.create_order(
+                symbol=self.market_symbol, 
+                type='limit', side=side, amount=qty_str, price=price_str, params=params
+            )
             
+            filled = float(order.get('filled', 0))
+            if filled > 0:
+                self.log(f"[成交确认] IOC订单成交，数量: {filled}")
+                time.sleep(0.5) 
+                self.sync_account_data()
+            else:
+                self.log(f"[未成交] IOC订单被取消")
+
+            self.force_sync = False 
+
         except Exception as e:
-            self.log(f"[账户同步失败] {e}")
+            err_msg = str(e).lower()
+            if "insufficient" in err_msg or "margin" in err_msg:
+                self.log(f"[严重错误] 保证金不足！策略急停。")
+                self.stop() 
+            else:
+                self.log(f"[纠偏失败] {e}")
+                self.force_sync = False 
 
     def manage_maker_orders(self, current_grid_idx):
-        force_sync = self.order_sync.manage_maker_orders(
-            current_grid_idx, 
-            self.grids, 
-            self.market_symbol
-        )
-        self.status_data['orders'] = self.order_sync.orders
-        return force_sync
-
-    def update_orders_display(self, current_idx):
-        self.order_sync.update_orders_display(current_idx, self.grids)
-        self.status_data['orders'] = self.order_sync.orders
-
-    def adjust_position(self, target_pos):
-        current_pos = float(self.status_data['current_pos'])
-        diff = target_pos - current_pos
-        min_amount = float(self.config.get('min_amount', 0.001)) 
-        
-        if abs(diff) < min_amount:
-            return
-
-        self.log(f"[仓位纠偏] 当前: {current_pos}, 目标: {target_pos}, 需变动: {diff}")
-        
-        if self.is_sim:
-            cost = diff * self.sim_price
-            fee = abs(cost) * 0.0005
-            self.sim_balance -= fee
-            
-            if (self.sim_pos > 0 and diff > 0) or (self.sim_pos < 0 and diff < 0):
-                old_val = self.sim_pos * self.sim_entry_price
-                new_val = diff * self.sim_price
-                self.sim_entry_price = (old_val + new_val) / (self.sim_pos + diff)
-            elif self.sim_pos == 0:
-                self.sim_entry_price = self.sim_price
-            
-            self.sim_pos += diff
+        if not self.exchange.apiKey: 
+            self.update_orders_display(current_grid_idx)
             return
 
         try:
-            side = 'buy' if diff > 0 else 'sell'
-            amount_abs = abs(diff)
-            amt_str = self._to_precision(amount=amount_abs)
+            active_limit = int(self.config.get('active_order_limit', 5))
+            amount = float(self.config['amount'])
             
-            self.exchange.create_order(
-                self.market_symbol, 
-                'market', 
-                side, 
-                amt_str
-            )
-            time.sleep(1)
-            self.log(f"[纠偏成功] {side} {amt_str}")
+            buy_indices = [i for i in range(current_grid_idx - 1, current_grid_idx - 1 - active_limit, -1) if i >= 0]
+            sell_indices = [i for i in range(current_grid_idx + 1, current_grid_idx + 1 + active_limit) if i < len(self.grids)]
+            
+            target_buy_prices = {self.grids[i] for i in buy_indices}
+            target_sell_prices = {self.grids[i] for i in sell_indices}
+            
+            open_orders = self.exchange.fetch_open_orders(self.market_symbol)
+            
+            to_cancel_ids = []
+            active_buy_prices = set()
+            active_sell_prices = set()
+
+            for order in open_orders:
+                price = float(order['price'])
+                oid = order['id']
+                side = order['side']
+                is_valid = False
+                
+                if side == 'buy':
+                    for tp in target_buy_prices:
+                        if abs(price - tp) < (tp * 0.0001):
+                            active_buy_prices.add(tp)
+                            is_valid = True
+                            break
+                elif side == 'sell':
+                    for tp in target_sell_prices:
+                        if abs(price - tp) < (tp * 0.0001):
+                            active_sell_prices.add(tp)
+                            is_valid = True
+                            break
+                
+                if not is_valid: to_cancel_ids.append(oid)
+            
+            to_create_specs = [] 
+            for idx in buy_indices:
+                p = self.grids[idx]
+                if p not in active_buy_prices: to_create_specs.append(('buy', p))
+            for idx in sell_indices:
+                p = self.grids[idx]
+                if p not in active_sell_prices: to_create_specs.append(('sell', p))
+
+            def exec_cancel(order_ids):
+                for oid in order_ids:
+                    try:
+                        self.exchange.cancel_order(oid, self.market_symbol)
+                        time.sleep(0.05)
+                    except: pass
+
+            def exec_create(specs):
+                created = False
+                for side, price in specs:
+                    try:
+                        price_str = self._to_precision(price=price)
+                        amt_str = self._to_precision(amount=amount)
+                        self.exchange.create_order(self.market_symbol, 'limit', side, amt_str, price_str)
+                        time.sleep(0.05)
+                        created = True
+                    except Exception as e:
+                        raise e
+                return created
+
+            try:
+                if to_create_specs: 
+                    if exec_create(to_create_specs):
+                        self.force_sync = True 
+
+                if to_cancel_ids: 
+                    exec_cancel(to_cancel_ids)
+                    
+            except Exception as e:
+                if "insufficient" in str(e).lower() or "margin" in str(e).lower():
+                    self.log(f"[资金优化] 保证金紧张，执行先撤后补...")
+                    if to_cancel_ids: exec_cancel(to_cancel_ids)
+                else:
+                    self.log(f"[挂单异常] {e}")
+
+            self.update_orders_display(current_grid_idx)
             
         except Exception as e:
-            self.log(f"[纠偏下单失败] {e}")
+            self.log(f"[挂单维护崩溃] {e}")
 
-    def run(self):
-        self.log("策略线程启动...")
-        self.running = True
+    def update_orders_display(self, current_idx):
+        orders = []
+        try:
+            amount = self.config['amount']
+            active_limit = int(self.config.get('active_order_limit', 5))
+            
+            for i in range(len(self.grids)-1, -1, -1):
+                price = self.grids[i]
+                order_type = "---"
+                style = "text-muted"
+                
+                if i == current_idx:
+                    style = "text-warning bg-dark border border-warning"
+                    order_type = "⚡ 现价 ⚡"
+                elif i > current_idx and i <= current_idx + active_limit:
+                    order_type = "SELL (挂单)"
+                    style = "text-danger"
+                elif i < current_idx and i >= current_idx - active_limit:
+                    order_type = "BUY (挂单)"
+                    style = "text-success"
+                    
+                orders.append({
+                    "idx": i, "price": price, "type": order_type, "amt": amount, "style": style
+                })
+            
+            self.status_data['orders'] = orders 
+        except Exception as e:
+            self.log(f"[显示更新错误] {e}")
+
+    def run_step(self, current_price):
+        if not self.running: return
         
-        if not self.init_exchange():
-            self.status_data['status'] = 'error'
-            self.running = False
+        self.status_data['last_price'] = current_price
+        self.status_data['current_price'] = current_price
+        self.status_data['running'] = True
+        self.status_data['paused'] = self.paused
+        
+        if self.paused: return 
+        
+        if not self.exchange.apiKey:
+            self.sim_calculate_pnl()
+            idx = self.calculate_grid_index(current_price)
+            target_pos = self.calculate_target_position(idx)
+            self.adjust_position(target_pos)
+            self.update_orders_display(idx)
             return
 
-        self.status_data['status'] = 'running'
+        if self.check_risk_management(): return
+
+        now = time.time()
+        new_grid_idx = self.calculate_grid_index(current_price)
+        self.status_data['current_grid_idx'] = new_grid_idx
         
-        error_count = 0
+        should_sync = False
+        
+        if self.force_sync:
+            should_sync = True
+        elif new_grid_idx != self.last_grid_idx:
+            should_sync = True
+        elif (now - self.last_sync_time) > self.sync_interval:
+            should_sync = True
+
+        if should_sync:
+            self.sync_account_data()
+            target_pos = self.calculate_target_position(new_grid_idx)
+            self.adjust_position(target_pos)
+            self.manage_maker_orders(new_grid_idx)
+            
+            self.last_grid_idx = new_grid_idx
+            self.last_sync_time = now
+
+    def _main_loop(self):
         while self.running:
+            if self.paused:
+                time.sleep(1)
+                continue
+
             try:
-                if self.paused:
-                    self.status_data['status'] = 'paused'
-                    time.sleep(1)
-                    continue
+                current_price = self.status_data['last_price']
+
+                if self.exchange and self.exchange.apiKey:
+                    try:
+                        ticker = self.exchange.fetch_ticker(self.market_symbol)
+                        current_price = float(ticker['last'])
+                    except Exception as e:
+                        self.log(f"[价格获取失败] {e}，使用上次价格继续")
+
                 else:
-                    self.status_data['status'] = 'running'
+                    fluctuation = random.uniform(-0.005, 0.005)
+                    current_price *= (1 + fluctuation)
+                    if current_price > 100:
+                        current_price = round(current_price, 2)
+                    elif current_price > 1:
+                        current_price = round(current_price, 4)
+                    else:
+                        current_price = round(current_price, 6)
 
-                price = self.get_market_price()
-                if price <= 0:
-                    time.sleep(2)
-                    continue
-
-                self.sync_account_data(price)
-
-                grid_idx = self.calculate_grid_index(price)
-                self.status_data['grid_idx'] = grid_idx
-                
-                target_pos = self.calculate_target_position(grid_idx)
-                self.adjust_position(target_pos)
-                
-                self.manage_maker_orders(grid_idx)
-
-                error_count = 0
-                time.sleep(float(self.config.get('interval', 5)))
+                self.status_data['last_price'] = current_price
+                self.run_step(current_price)
 
             except Exception as e:
-                error_count += 1
                 self.log(f"[主循环异常] {e}")
-                traceback.print_exc()
-                time.sleep(5)
-                if error_count > 10:
-                    self.log("错误次数过多，策略自动停止")
-                    self.running = False
-                    self.status_data['status'] = 'error'
+
+            time.sleep(1)
+
+    def _initialize_and_run(self):
+        self.log("[系统] 正在后台初始化交易所、账户和网格...")
+
+        try:
+            if not self.init_exchange():
+                raise Exception("交易所初始化失败")
+            if not self.setup_account():
+                raise Exception("账户设置失败")
+            if not self.generate_grids():
+                raise Exception("网格生成失败")
+
+            start_price = 0
+            try:
+                if self.exchange and self.exchange.apiKey:
+                    ticker = self.exchange.fetch_ticker(self.market_symbol)
+                    start_price = float(ticker['last'])
+                else:
+                    start_price = sum(self.grids) / len(self.grids)
+                self.status_data['last_price'] = start_price
+                self.status_data['current_price'] = start_price
+
+                idx = self.calculate_grid_index(start_price)
+                self.update_orders_display(idx)
+                self.log(f"[系统] 初始挂单墙已生成，当前价: {start_price}")
+            except Exception as e:
+                self.log(f"[警告] 初始价格获取失败: {e}")
+                self.update_orders_display(-1)
+
+            mode = self.config.get('strategy_type', 'neutral')
+            self.log(f"[合约] 策略初始化完成 (Phase 3 Engine) | 模式: {mode}")
+
+            if start_price > 0:
+                self.log("[系统] 执行首单建仓...")
+                self.run_step(start_price)
+
+            self._main_loop()
+
+        except Exception as e:
+            self.log(f"[初始化严重错误] {e}，策略无法启动")
+            self.running = False
+
+    def start(self):
+        if self.running:
+            self.log("[警告] 策略已在运行中")
+            return
+
+        self.running = True
+        self.paused = False
+        self.force_sync = True
+        self.last_grid_idx = -1
+
+        self.worker_thread = threading.Thread(target=self._initialize_and_run, daemon=True)
+        self.worker_thread.start()
+
+        self.log("[系统] 启动命令已接收，后台线程正在初始化（不会阻塞界面）")
+
+    def pause(self):
+        self.paused = True
+        self.log("[指令] 策略已暂停！")
+        if self.exchange and self.exchange.apiKey:
+            try:
+                open_orders = self.exchange.fetch_open_orders(self.market_symbol)
+                for order in open_orders:
+                    try: self.exchange.cancel_order(order['id'], self.market_symbol)
+                    except: pass
+                self.log("[系统] 挂单已全部撤销")
+            except Exception as e: 
+                self.log(f"[暂停撤单失败] {e}")
+
+    def resume(self):
+        self.paused = False
+        self.force_sync = True 
+        self.log("[指令] 策略恢复运行！")
 
     def stop(self):
-        self.running = False
-        self.log("正在停止策略...")
-        if self.exchange and not self.is_sim:
+        self.log("[指令] 正在停止... 撤单并平仓")
+        self.running = False 
+        self.paused = False
+
+        if self.worker_thread and self.worker_thread.is_alive():
+            self.worker_thread.join(timeout=15)
+
+        if self.exchange and self.exchange.apiKey:
             try:
-                self.exchange.cancel_all_orders(self.market_symbol)
-            except:
-                pass
+                open_orders = self.exchange.fetch_open_orders(self.market_symbol)
+                for order in open_orders:
+                    try: self.exchange.cancel_order(order['id'], self.market_symbol)
+                    except: pass
+                
+                positions = self.exchange.fetch_positions([self.market_symbol])
+                for pos in positions:
+                    if pos['symbol'] == self.market_symbol:
+                        amt = self._get_position_amount(pos['info'])
+                        if amt != 0:
+                            side = 'sell' if amt > 0 else 'buy'
+                            self.exchange.create_order(self.market_symbol, 'market', side, abs(amt))
+                            self.log(f"[系统] 已平仓 {amt}")
+            except Exception as e:
+                self.log(f"[停止过程出错] {e}")
+        else:
+            self.status_data['current_pos'] = 0
+            self.log("[模拟] 已重置虚拟持仓")
