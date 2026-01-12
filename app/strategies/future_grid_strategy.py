@@ -46,7 +46,7 @@ class FutureGridBot:
             secret = self.config.get('secret', '')
             password = self.config.get('password', '')
 
-            # 2. 从外部绝对路径加载密钥舱
+            # 2. 从外部绝对路径加载密钥舱 (GitHub 脱敏)
             EXTERNAL_SECRETS_PATH = "/opt/myquant_config/secrets.py"
             
             if not api_key:
@@ -161,7 +161,7 @@ class FutureGridBot:
             
             for pos in positions:
                 if pos['symbol'] == self.market_symbol:
-                    # 【修复】使用 or 0 确保 None 会被转换为 0，防止 float(None) 报错
+                    # 使用 or 0 确保 None 会被转换为 0
                     self.status_data['current_pos'] = self._get_position_amount(pos['info'])
                     self.status_data['entry_price'] = float(pos.get('entryPrice') or 0)
                     self.status_data['liquidation_price'] = float(pos.get('liquidationPrice') or 0)
@@ -295,7 +295,7 @@ class FutureGridBot:
         return str(price) if price else str(amount)
 
     def adjust_position(self, target_pos):
-        """【补丁修正】增加空值校验，并强制打破重试循环"""
+        """【Final Fix】纠偏逻辑：空值防御 + 死锁解除"""
         current_pos = self.status_data['current_pos']
         amount_per_grid = float(self.config['amount'])
         
@@ -320,13 +320,14 @@ class FutureGridBot:
             self.log(f"[系统纠偏] 偏离检测! 正在{side} {qty:.4f}")
             
             ticker = self.exchange.fetch_ticker(self.market_symbol)
-            # 【修复】增加对 ticker 中 ask/bid 为 None 的防御
-            # 如果 ask 缺失，尝试用 last 价格兜底，防止 float(None) 报错
+            
+            # 【修复】数据兜底，防止 NoneType 崩溃
+            # 优先用 ask/bid，没有则用 last，最后用本地缓存价格
             if side == 'buy':
-                base_price = float(ticker.get('ask') or ticker.get('last'))
-                limit_price = base_price * 1.002
+                base_price = float(ticker.get('ask') or ticker.get('last') or self.status_data['last_price'])
+                limit_price = base_price * 1.002 # 0.2% 滑点保护
             else:
-                base_price = float(ticker.get('bid') or ticker.get('last'))
+                base_price = float(ticker.get('bid') or ticker.get('last') or self.status_data['last_price'])
                 limit_price = base_price * 0.998
 
             price_str = self._to_precision(price=limit_price)
@@ -342,12 +343,11 @@ class FutureGridBot:
             if filled > 0:
                 self.log(f"[成交确认] IOC订单成交，数量: {filled}")
                 time.sleep(0.5) 
-                self.sync_account_data()
+                self.sync_account_data() # 立即刷新前端
             else:
                 self.log(f"[未成交] IOC订单被取消")
 
-            # 【核心修复】无论成交与否，只要尝试过了，就关闭强制同步
-            # 这打破了“报错->重试”的死循环，防止卡死 Monitor 线程
+            # 【核心修复】无论成交与否，都必须关闭强制同步，防止死循环
             self.force_sync = False 
 
         except Exception as e:
@@ -357,7 +357,7 @@ class FutureGridBot:
                 self.stop() 
             else:
                 self.log(f"[纠偏失败] {e}")
-                # 【核心修复】即使报错，也要关闭强制同步，等待下一次心跳或网格跨越再重试
+                # 【核心修复】报错也要释放锁，否则 Monitor 线程会卡死
                 self.force_sync = False 
 
     def manage_maker_orders(self, current_grid_idx):
@@ -516,8 +516,7 @@ class FutureGridBot:
             
             self.last_grid_idx = new_grid_idx
             self.last_sync_time = now
-            # 注意：force_sync = False 已移动到 adjust_position 内部
-            # 这样确保了无论是成功还是失败，都会关闭标志位，防止死循环
+            # force_sync 的关闭已下放到 adjust_position 内部处理
 
     def start(self):
         if self.init_exchange() and self.setup_account() and self.generate_grids():
