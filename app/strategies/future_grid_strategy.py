@@ -395,32 +395,36 @@ class FutureGridBot:
             active_limit = int(self.config.get('active_order_limit', 5))
             amount = float(self.config['amount'])
             
-            # === Maker Centric v2: 动态偏移量 ===
+            # === Maker Centric v3: 防磨损优化 ===
             mode = self.config.get('strategy_type', 'neutral')
             
             buy_start_offset = -1
             sell_start_offset = 1
             
             if mode == 'long':
-                # Long: 放弃当前格持仓(Offset 0)，卖单从上上格开始(Offset 2)
-                buy_start_offset = 0
+                # [修改点] Long模式防磨损逻辑
+                # 原逻辑: buy_start_offset = 0 (在当前支撑位90800挂买，导致反复成交)
+                # 新逻辑: buy_start_offset = -1 (退守一格，在90400挂买)
+                # 效果：现价90855时，买1是90400，卖单(如有持仓)是91200。中间90800留出安全空档。
+                buy_start_offset = -1
+                
+                # 卖单依然从上上格开始(因为当前格被视为无持仓区)
                 sell_start_offset = 2
+
             elif mode == 'short':
-                # Short: 放弃当前格空单(Offset 1)，买单从下下格开始(Offset -2)
+                # Short模式保持不变
+                # 放弃当前格空单(Offset 1)，买单从下下格开始(Offset -2)
                 buy_start_offset = -2
                 sell_start_offset = 1
             
             start_buy = current_grid_idx + buy_start_offset
             start_sell = current_grid_idx + sell_start_offset
             
-            # === 核心修复点：范围终点必须跟随起点动态计算 ===
-            # 旧错误逻辑: range(start_sell, current_grid_idx + 1 + active_limit) -> 导致窗口缩水
-            # 新正确逻辑: range(start_sell, start_sell + active_limit) -> 保证数量固定为 active_limit
-            
+            # 范围计算保持 v2 的正确逻辑 (动态终点)
             buy_indices = [i for i in range(start_buy, start_buy - active_limit, -1) if i >= 0]
             sell_indices = [i for i in range(start_sell, start_sell + active_limit) if i < len(self.grids)]
             
-            # ====================================================
+            # ... (后续代码保持不变)
             
             target_buy_prices = {self.grids[i] for i in buy_indices}
             target_sell_prices = {self.grids[i] for i in sell_indices}
