@@ -20,7 +20,9 @@ class SharedState:
 def add_log(msg):
     ts = time.strftime("%H:%M:%S")
     log_entry = f"[{ts}] {msg}"
-    SharedState.system_logs.insert(0, log_entry)
+    # === 核心修复: insert 改为 appendleft 以支持自动滚动 ===
+    # SharedState.system_logs.insert(0, log_entry)  <-- 原错误代码
+    SharedState.system_logs.appendleft(log_entry)
     print(log_entry)
 
 def get_public_exchange():

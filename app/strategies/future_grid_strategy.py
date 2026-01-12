@@ -315,7 +315,7 @@ class FutureGridBot:
         
         diff = target_pos - current_pos
         
-        if abs(diff) < (amount_per_grid * 0.5):
+        if abs(diff) < (amount_per_grid * 0.8):
             return
 
         side = 'buy' if diff > 0 else 'sell'
