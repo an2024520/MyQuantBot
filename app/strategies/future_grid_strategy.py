@@ -151,11 +151,11 @@ class FutureGridBot:
         except: return 0.0
 
     def sync_account_data(self):
-        """同步账户数据：包含持仓详情与费率 (增加空值校验)"""
+        """同步账户数据：包含空值校验与费率"""
         if not self.running or not self.exchange.apiKey: return
 
         try:
-            # 1. 获取持仓与账户信息
+            # 1. 获取持仓
             positions = self.exchange.fetch_positions([self.market_symbol])
             found_pos = False
             
@@ -178,6 +178,7 @@ class FutureGridBot:
             # 2. 获取余额
             balance = self.exchange.fetch_balance()
             quote_currency = self.config['symbol'].split('/')[1] 
+            
             if quote_currency in balance:
                 self.status_data['wallet_balance'] = float(balance[quote_currency].get('total', 0) or 0)
             elif 'total' in balance and quote_currency in balance['total']:
@@ -315,7 +316,7 @@ class FutureGridBot:
                 self.status_data['entry_price'] = self.status_data['last_price']
             return
 
-        # --- 实盘环境 (IOC 限价单) ---
+        # --- 实盘环境 ---
         try:
             self.log(f"[系统纠偏] 偏离检测! 正在{side} {qty:.4f}")
             
@@ -516,7 +517,7 @@ class FutureGridBot:
             
             self.last_grid_idx = new_grid_idx
             self.last_sync_time = now
-            # force_sync 的关闭已下放到 adjust_position 内部处理
+            # force_sync 关闭逻辑已移至 adjust_position
 
     def start(self):
         if self.init_exchange() and self.setup_account() and self.generate_grids():
@@ -525,7 +526,7 @@ class FutureGridBot:
             self.force_sync = True 
             self.last_grid_idx = -1
             
-            start_price = 0
+            # 只渲染 UI，不执行交易逻辑
             try:
                 ticker = self.exchange.fetch_ticker(self.market_symbol)
                 start_price = float(ticker['last'])
@@ -540,10 +541,7 @@ class FutureGridBot:
             mode = self.config.get('strategy_type')
             self.log(f"[合约] 策略启动 (Phase 3 Engine) | 模式: {mode}")
 
-            if start_price > 0:
-                self.log("[系统] 正在执行首单建仓...")
-                self.run_step(start_price)
-
+            # 【重要】已删除 self.run_step(start_price)，防止阻塞主线程
         else:
             self.running = False
 
