@@ -339,14 +339,19 @@ class FutureGridBot:
                 side=side,
                 amount=qty_str
             )
+
+            # 新增：通过fetch_order获取准确filled
+            order_id = order['id']
+            time.sleep(0.5)  # 等待成交上链
+            full_order = self.exchange.fetch_order(order_id, self.market_symbol)
+            filled = float(full_order.get('filled', 0))  # 兜底0更安全
             
-            filled = float(order.get('filled', qty))
             if filled > 0:
                 self.log(f"[成交确认] 市价订单成交，数量: {filled:.4f}")
                 time.sleep(0.5)
                 self.sync_account_data()
             else:
-                self.log(f"[未成交] 市价订单未成交（异常情况）")
+                self.log(f"[未成交] 市价订单未成交或API数据获取异常（异常情况）")
 
             self.force_sync = True
 
