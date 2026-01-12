@@ -1,4 +1,5 @@
 # app/strategies/future_grid_strategy.py
+# v7.8
 import ccxt
 import time
 import math
