@@ -1,5 +1,4 @@
 # app/strategies/future_grid_strategy.py
-# v7.8
 import ccxt
 import time
 import math
@@ -162,7 +161,6 @@ class FutureGridBot:
             
             for pos in positions:
                 if pos['symbol'] == self.market_symbol:
-                    # 使用 or 0 确保 None 会被转换为 0
                     self.status_data['current_pos'] = self._get_position_amount(pos['info'])
                     self.status_data['entry_price'] = float(pos.get('entryPrice') or 0)
                     self.status_data['liquidation_price'] = float(pos.get('liquidationPrice') or 0)
@@ -297,12 +295,14 @@ class FutureGridBot:
         return str(price) if price else str(amount)
 
     def adjust_position(self, target_pos):
-        """【Final Fix】纠偏逻辑：空值防御 + 死锁解除"""
+        """【Logic Fix】纠偏逻辑：清理了内部的 force_sync 操作，只负责交易"""
         current_pos = self.status_data['current_pos']
         amount_per_grid = float(self.config['amount'])
         
         diff = target_pos - current_pos
         
+        # 中性策略卡死的核心原因：提前返回时未关闭 force_sync
+        # 现在的修复：force_sync 由 run_step 统一管理，这里只管交易
         if abs(diff) < (amount_per_grid * 0.5):
             return
 
@@ -323,8 +323,7 @@ class FutureGridBot:
             
             ticker = self.exchange.fetch_ticker(self.market_symbol)
             
-            # 【修复】数据兜底，防止 NoneType 崩溃
-            # 优先用 ask/bid，没有则用 last，最后用本地缓存价格
+            # 数据兜底
             if side == 'buy':
                 base_price = float(ticker.get('ask') or ticker.get('last') or self.status_data['last_price'])
                 limit_price = base_price * 1.002 # 0.2% 滑点保护
@@ -349,9 +348,6 @@ class FutureGridBot:
             else:
                 self.log(f"[未成交] IOC订单被取消")
 
-            # 【核心修复】无论成交与否，都必须关闭强制同步，防止死循环
-            self.force_sync = False 
-
         except Exception as e:
             err_msg = str(e).lower()
             if "insufficient" in err_msg or "margin" in err_msg:
@@ -359,8 +355,6 @@ class FutureGridBot:
                 self.stop() 
             else:
                 self.log(f"[纠偏失败] {e}")
-                # 【核心修复】报错也要释放锁，否则 Monitor 线程会卡死
-                self.force_sync = False 
 
     def manage_maker_orders(self, current_grid_idx):
         if not self.exchange.apiKey: 
@@ -487,6 +481,7 @@ class FutureGridBot:
         
         if self.paused: return 
         
+        # 1. 模拟模式
         if not self.exchange.apiKey:
             self.sim_calculate_pnl()
             idx = self.calculate_grid_index(current_price)
@@ -495,6 +490,7 @@ class FutureGridBot:
             self.update_orders_display(idx)
             return
 
+        # 2. 风控
         if self.check_risk_management(): return
 
         now = time.time()
@@ -511,6 +507,10 @@ class FutureGridBot:
             should_sync = True
 
         if should_sync:
+            # 【核心修复】防止无限循环：进入同步块后立即关闭开关
+            # 无论后续 adjust_position 是否提前返回，force_sync 都会被重置为 False
+            self.force_sync = False 
+
             self.sync_account_data()
             target_pos = self.calculate_target_position(new_grid_idx)
             self.adjust_position(target_pos)
@@ -518,7 +518,6 @@ class FutureGridBot:
             
             self.last_grid_idx = new_grid_idx
             self.last_sync_time = now
-            # force_sync 关闭逻辑已移至 adjust_position
 
     def start(self):
         if self.init_exchange() and self.setup_account() and self.generate_grids():
@@ -542,7 +541,8 @@ class FutureGridBot:
             mode = self.config.get('strategy_type')
             self.log(f"[合约] 策略启动 (Phase 3 Engine) | 模式: {mode}")
 
-            # 【重要】已删除 self.run_step(start_price)，防止阻塞主线程
+            # 【已删除】self.run_step(start_price) 
+            # 移交 Monitor 线程驱动，彻底解决 UI 卡死
         else:
             self.running = False
 
