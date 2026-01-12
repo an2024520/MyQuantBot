@@ -310,56 +310,54 @@ class FutureGridBot:
         return str(price) if price else str(amount)
 
     def adjust_position(self, target_pos):
-    current_pos = self.status_data['current_pos']
-    amount_per_grid = float(self.config['amount'])
-    
-    diff = target_pos - current_pos
-    
-    if abs(diff) < (amount_per_grid * 0.5):
-        return
-
-    side = 'buy' if diff > 0 else 'sell'
-    qty = abs(diff)
-    
-    if not self.exchange.apiKey:
-        self.log(f"[模拟纠偏] 目标{target_pos:.4f} 实持{current_pos:.4f} -> 市价{side} {qty:.4f}")
-        self.status_data['current_pos'] += diff
-        if self.status_data['current_pos'] != 0:
-            self.status_data['entry_price'] = self.status_data['last_price']
-        return
-
-    try:
-        self.log(f"[系统纠偏] 偏离检测! 正在市价{side} {qty:.4f}")
+        current_pos = self.status_data['current_pos']
+        amount_per_grid = float(self.config['amount'])
         
-        qty_str = self._to_precision(amount=qty)
+        diff = target_pos - current_pos
         
-        order = self.exchange.create_order(
-            symbol=self.market_symbol,
-            type='market',      # 改为市价单
-            side=side,
-            amount=qty_str
-            # 无price，无params={'timeInForce': 'IOC'}
-        )
+        if abs(diff) < (amount_per_grid * 0.5):
+            return
+
+        side = 'buy' if diff > 0 else 'sell'
+        qty = abs(diff)
         
-        # 市价单通常立即全成，短暂等待后同步账户数据
-        filled = float(order.get('filled', qty))  # OKX市价单filled通常等于amount
-        if filled > 0:
-            self.log(f"[成交确认] 市价订单成交，数量: {filled:.4f}")
-            time.sleep(0.5)
-            self.sync_account_data()
-        else:
-            self.log(f"[未成交] 市价订单未成交（异常情况）")
+        if not self.exchange.apiKey:
+            self.log(f"[模拟纠偏] 目标{target_pos:.4f} 实持{current_pos:.4f} -> 市价{side} {qty:.4f}")
+            self.status_data['current_pos'] += diff
+            if self.status_data['current_pos'] != 0:
+                self.status_data['entry_price'] = self.status_data['last_price']
+            return
 
-        self.force_sync = True  # 市价后强制下次同步，确保数据最新
+        try:
+            self.log(f"[系统纠偏] 偏离检测! 正在市价{side} {qty:.4f}")
+            
+            qty_str = self._to_precision(amount=qty)
+            
+            order = self.exchange.create_order(
+                symbol=self.market_symbol,
+                type='market',
+                side=side,
+                amount=qty_str
+            )
+            
+            filled = float(order.get('filled', qty))
+            if filled > 0:
+                self.log(f"[成交确认] 市价订单成交，数量: {filled:.4f}")
+                time.sleep(0.5)
+                self.sync_account_data()
+            else:
+                self.log(f"[未成交] 市价订单未成交（异常情况）")
 
-    except Exception as e:
-        err_msg = str(e).lower()
-        if "insufficient" in err_msg or "margin" in err_msg:
-            self.log(f"[严重错误] 保证金不足！策略急停。")
-            self.stop()
-        else:
-            self.log(f"[纠偏失败] {e}")
-            self.force_sync = True  # 失败也强制同步，防止数据陈旧
+            self.force_sync = True
+
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "insufficient" in err_msg or "margin" in err_msg:
+                self.log(f"[严重错误] 保证金不足！策略急停。")
+                self.stop()
+            else:
+                self.log(f"[纠偏失败] {e}")
+                self.force_sync = True
 
     def manage_maker_orders(self, current_grid_idx):
         if not self.exchange.apiKey: 
