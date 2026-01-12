@@ -2,8 +2,10 @@
 import ccxt
 import time
 import math
-import os                   
-import importlib.util       
+import os
+import importlib.util
+import threading
+import random  # 用于模拟模式下的价格波动
 
 class FutureGridBot:
     def __init__(self, config, logger_func):
@@ -33,8 +35,12 @@ class FutureGridBot:
             "current_pos": 0,       
             "entry_price": 0,       
             "last_price": 0,        
-            "wallet_balance": 0     
+            "wallet_balance": 0,
+            "status": "offline"      # 新增：offline / initializing / running / paused / error
         }
+
+        # 新增：后台运行线程
+        self.worker_thread = None
 
     def init_exchange(self):
         try:
@@ -65,8 +71,6 @@ class FutureGridBot:
                             self.log(f"[系统] ✅ 已加载外部密钥舱 (/opt/myquant_config/)")
                     except Exception as e:
                         self.log(f"[系统] 外部密钥加载失败: {e}")
-                else:
-                    pass
 
             # 3. 构造交易所参数
             params = {
@@ -115,9 +119,9 @@ class FutureGridBot:
                 return True
 
             leverage = int(self.config.get('leverage', 1))
-            try: self.exchange.set_leverage(leverage, self.market_symbol)
+            try: self.exchange.fapiPrivate_post_leverage({'symbol': self.market_symbol.replace('/', ''), 'leverage': leverage})
             except: pass 
-            try: self.exchange.set_position_mode(hedged=False, symbol=self.market_symbol)
+            try: self.exchange.fapiPrivate_post_positionSide_dual({'dualSidePosition': False})
             except: pass
             return True
         except Exception as e:
@@ -151,11 +155,9 @@ class FutureGridBot:
         except: return 0.0
 
     def sync_account_data(self):
-        """同步账户数据：包含空值校验与费率"""
         if not self.running or not self.exchange.apiKey: return
 
         try:
-            # 1. 获取持仓
             positions = self.exchange.fetch_positions([self.market_symbol])
             found_pos = False
             
@@ -174,16 +176,13 @@ class FutureGridBot:
                 self.status_data['liquidation_price'] = 0
                 self.status_data['unrealized_pnl'] = 0
 
-            # 2. 获取余额
             balance = self.exchange.fetch_balance()
             quote_currency = self.config['symbol'].split('/')[1] 
-            
-            if quote_currency in balance:
-                self.status_data['wallet_balance'] = float(balance[quote_currency].get('total', 0) or 0)
-            elif 'total' in balance and quote_currency in balance['total']:
-                self.status_data['wallet_balance'] = float(balance['total'][quote_currency] or 0)
+            if quote_currency in balance['total']:
+                self.status_data['wallet_balance'] = float(balance['total'].get(quote_currency, 0))
+            else:
+                self.status_data['wallet_balance'] = 0
 
-            # 3. 获取资金费率
             try:
                 funding_info = self.exchange.fetch_funding_rate(self.market_symbol)
                 self.status_data['funding_rate'] = float(funding_info.get('fundingRate', 0) or 0)
@@ -295,21 +294,17 @@ class FutureGridBot:
         return str(price) if price else str(amount)
 
     def adjust_position(self, target_pos):
-        """【Logic Fix】纠偏逻辑：清理了内部的 force_sync 操作，只负责交易"""
         current_pos = self.status_data['current_pos']
         amount_per_grid = float(self.config['amount'])
         
         diff = target_pos - current_pos
         
-        # 中性策略卡死的核心原因：提前返回时未关闭 force_sync
-        # 现在的修复：force_sync 由 run_step 统一管理，这里只管交易
         if abs(diff) < (amount_per_grid * 0.5):
             return
 
         side = 'buy' if diff > 0 else 'sell'
         qty = abs(diff)
         
-        # --- 模拟环境 ---
         if not self.exchange.apiKey:
             self.log(f"[模拟纠偏] 目标{target_pos:.4f} 实持{current_pos:.4f} -> 市价{side} {qty:.4f}")
             self.status_data['current_pos'] += diff
@@ -317,16 +312,14 @@ class FutureGridBot:
                 self.status_data['entry_price'] = self.status_data['last_price']
             return
 
-        # --- 实盘环境 ---
         try:
             self.log(f"[系统纠偏] 偏离检测! 正在{side} {qty:.4f}")
             
             ticker = self.exchange.fetch_ticker(self.market_symbol)
             
-            # 数据兜底
             if side == 'buy':
                 base_price = float(ticker.get('ask') or ticker.get('last') or self.status_data['last_price'])
-                limit_price = base_price * 1.002 # 0.2% 滑点保护
+                limit_price = base_price * 1.002
             else:
                 base_price = float(ticker.get('bid') or ticker.get('last') or self.status_data['last_price'])
                 limit_price = base_price * 0.998
@@ -344,9 +337,11 @@ class FutureGridBot:
             if filled > 0:
                 self.log(f"[成交确认] IOC订单成交，数量: {filled}")
                 time.sleep(0.5) 
-                self.sync_account_data() # 立即刷新前端
+                self.sync_account_data()
             else:
                 self.log(f"[未成交] IOC订单被取消")
+
+            self.force_sync = False 
 
         except Exception as e:
             err_msg = str(e).lower()
@@ -355,6 +350,7 @@ class FutureGridBot:
                 self.stop() 
             else:
                 self.log(f"[纠偏失败] {e}")
+                self.force_sync = False 
 
     def manage_maker_orders(self, current_grid_idx):
         if not self.exchange.apiKey: 
@@ -479,9 +475,12 @@ class FutureGridBot:
         if not self.running: return
         self.status_data['last_price'] = current_price
         
-        if self.paused: return 
+        if self.paused: 
+            self.status_data['status'] = "paused"
+            return 
         
-        # 1. 模拟模式
+        self.status_data['status'] = "running"
+
         if not self.exchange.apiKey:
             self.sim_calculate_pnl()
             idx = self.calculate_grid_index(current_price)
@@ -490,7 +489,6 @@ class FutureGridBot:
             self.update_orders_display(idx)
             return
 
-        # 2. 风控
         if self.check_risk_management(): return
 
         now = time.time()
@@ -507,10 +505,6 @@ class FutureGridBot:
             should_sync = True
 
         if should_sync:
-            # 【核心修复】防止无限循环：进入同步块后立即关闭开关
-            # 无论后续 adjust_position 是否提前返回，force_sync 都会被重置为 False
-            self.force_sync = False 
-
             self.sync_account_data()
             target_pos = self.calculate_target_position(new_grid_idx)
             self.adjust_position(target_pos)
@@ -519,44 +513,115 @@ class FutureGridBot:
             self.last_grid_idx = new_grid_idx
             self.last_sync_time = now
 
-    def start(self):
-        if self.init_exchange() and self.setup_account() and self.generate_grids():
-            self.running = True
-            self.paused = False
-            self.force_sync = True 
-            self.last_grid_idx = -1
-            
-            # 只渲染 UI，不执行交易逻辑
+    def _main_loop(self):
+        """主运行循环（初始化成功后进入）"""
+        while self.running:
+            if self.paused:
+                time.sleep(1)
+                continue
+
             try:
-                ticker = self.exchange.fetch_ticker(self.market_symbol)
-                start_price = float(ticker['last'])
+                current_price = self.status_data['last_price']
+
+                if self.exchange and self.exchange.apiKey:
+                    try:
+                        ticker = self.exchange.fetch_ticker(self.market_symbol)
+                        current_price = float(ticker['last'])
+                    except Exception as e:
+                        self.log(f"[价格获取失败] {e}，使用上次价格继续")
+                else:
+                    # 模拟模式波动
+                    fluctuation = random.uniform(-0.005, 0.005)
+                    current_price *= (1 + fluctuation)
+                    if current_price > 100:
+                        current_price = round(current_price, 2)
+                    elif current_price > 1:
+                        current_price = round(current_price, 4)
+                    else:
+                        current_price = round(current_price, 6)
+
+                self.status_data['last_price'] = current_price
+                self.run_step(current_price)
+
+            except Exception as e:
+                self.log(f"[主循环异常] {e}")
+
+            time.sleep(1)
+
+    def _initialize_and_run(self):
+        """后台线程：完成所有初始化 + 主循环"""
+        self.status_data['status'] = "initializing"
+        self.log("[系统] 正在后台初始化交易所、账户和网格...")
+
+        try:
+            if not self.init_exchange():
+                raise Exception("交易所初始化失败")
+            if not self.setup_account():
+                raise Exception("账户设置失败")
+            if not self.generate_grids():
+                raise Exception("网格生成失败")
+
+            # 初始化价格
+            start_price = 0
+            try:
+                if self.exchange and self.exchange.apiKey:
+                    ticker = self.exchange.fetch_ticker(self.market_symbol)
+                    start_price = float(ticker['last'])
+                else:
+                    start_price = sum(self.grids) / len(self.grids)
                 self.status_data['last_price'] = start_price
+
                 idx = self.calculate_grid_index(start_price)
                 self.update_orders_display(idx)
                 self.log(f"[系统] 初始挂单墙已生成，当前价: {start_price}")
             except Exception as e:
-                self.log(f"[警告] 初始价格获取延迟: {e}")
+                self.log(f"[警告] 初始价格获取失败: {e}")
                 self.update_orders_display(-1)
-            
-            mode = self.config.get('strategy_type')
-            self.log(f"[合约] 策略启动 (Phase 3 Engine) | 模式: {mode}")
 
-            # 【已删除】self.run_step(start_price) 
-            # 移交 Monitor 线程驱动，彻底解决 UI 卡死
-        else:
+            mode = self.config.get('strategy_type', 'neutral')
+            self.log(f"[合约] 策略初始化完成 (Phase 3 Engine) | 模式: {mode}")
+
+            # 首步建仓
+            if start_price > 0:
+                self.log("[系统] 执行首单建仓...")
+                self.run_step(start_price)
+
+            # 进入主循环
+            self._main_loop()
+
+        except Exception as e:
+            self.log(f"[初始化严重错误] {e}，策略无法启动")
             self.running = False
+            self.status_data['status'] = "error"
+
+    def start(self):
+        """非阻塞启动：仅启动后台线程，立即返回"""
+        if self.running:
+            self.log("[警告] 策略已在运行中")
+            return
+
+        self.running = True
+        self.paused = False
+        self.force_sync = True
+        self.last_grid_idx = -1
+
+        self.worker_thread = threading.Thread(target=self._initialize_and_run, daemon=True)
+        self.worker_thread.start()
+
+        self.log("[系统] 启动命令已接收，后台线程正在初始化（不会阻塞界面）")
 
     def pause(self):
         self.paused = True
         self.log("[指令] 策略已暂停！")
-        if self.exchange.apiKey:
+        if self.exchange and self.exchange.apiKey:
             try:
                 open_orders = self.exchange.fetch_open_orders(self.market_symbol)
                 for order in open_orders:
                     try: self.exchange.cancel_order(order['id'], self.market_symbol)
                     except: pass
                 self.log("[系统] 挂单已全部撤销")
-            except Exception as e: self.log(f"[暂停撤单失败] {e}")
+            except Exception as e: 
+                self.log(f"[暂停撤单失败] {e}")
 
     def resume(self):
         self.paused = False
@@ -567,7 +632,12 @@ class FutureGridBot:
         self.log("[指令] 正在停止... 撤单并平仓")
         self.running = False 
         self.paused = False
-        if self.exchange.apiKey:
+        self.status_data['status'] = "offline"
+
+        if self.worker_thread and self.worker_thread.is_alive():
+            self.worker_thread.join(timeout=15)
+
+        if self.exchange and self.exchange.apiKey:
             try:
                 open_orders = self.exchange.fetch_open_orders(self.market_symbol)
                 for order in open_orders:
@@ -582,7 +652,8 @@ class FutureGridBot:
                             side = 'sell' if amt > 0 else 'buy'
                             self.exchange.create_order(self.market_symbol, 'market', side, abs(amt))
                             self.log(f"[系统] 已平仓 {amt}")
-            except Exception as e: self.log(f"[停止过程出错] {e}")
+            except Exception as e:
+                self.log(f"[停止过程出错] {e}")
         else:
             self.status_data['current_pos'] = 0
             self.log("[模拟] 已重置虚拟持仓")
