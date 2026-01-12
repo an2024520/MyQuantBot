@@ -310,63 +310,56 @@ class FutureGridBot:
         return str(price) if price else str(amount)
 
     def adjust_position(self, target_pos):
-        current_pos = self.status_data['current_pos']
-        amount_per_grid = float(self.config['amount'])
+    current_pos = self.status_data['current_pos']
+    amount_per_grid = float(self.config['amount'])
+    
+    diff = target_pos - current_pos
+    
+    if abs(diff) < (amount_per_grid * 0.5):
+        return
+
+    side = 'buy' if diff > 0 else 'sell'
+    qty = abs(diff)
+    
+    if not self.exchange.apiKey:
+        self.log(f"[模拟纠偏] 目标{target_pos:.4f} 实持{current_pos:.4f} -> 市价{side} {qty:.4f}")
+        self.status_data['current_pos'] += diff
+        if self.status_data['current_pos'] != 0:
+            self.status_data['entry_price'] = self.status_data['last_price']
+        return
+
+    try:
+        self.log(f"[系统纠偏] 偏离检测! 正在市价{side} {qty:.4f}")
         
-        diff = target_pos - current_pos
+        qty_str = self._to_precision(amount=qty)
         
-        if abs(diff) < (amount_per_grid * 0.5):
-            return
-
-        side = 'buy' if diff > 0 else 'sell'
-        qty = abs(diff)
+        order = self.exchange.create_order(
+            symbol=self.market_symbol,
+            type='market',      # 改为市价单
+            side=side,
+            amount=qty_str
+            # 无price，无params={'timeInForce': 'IOC'}
+        )
         
-        if not self.exchange.apiKey:
-            self.log(f"[模拟纠偏] 目标{target_pos:.4f} 实持{current_pos:.4f} -> 市价{side} {qty:.4f}")
-            self.status_data['current_pos'] += diff
-            if self.status_data['current_pos'] != 0:
-                self.status_data['entry_price'] = self.status_data['last_price']
-            return
+        # 市价单通常立即全成，短暂等待后同步账户数据
+        filled = float(order.get('filled', qty))  # OKX市价单filled通常等于amount
+        if filled > 0:
+            self.log(f"[成交确认] 市价订单成交，数量: {filled:.4f}")
+            time.sleep(0.5)
+            self.sync_account_data()
+        else:
+            self.log(f"[未成交] 市价订单未成交（异常情况）")
 
-        try:
-            self.log(f"[系统纠偏] 偏离检测! 正在{side} {qty:.4f}")
-            
-            ticker = self.exchange.fetch_ticker(self.market_symbol)
-            
-            if side == 'buy':
-                base_price = float(ticker.get('ask') or ticker.get('last') or self.status_data['last_price'])
-                limit_price = base_price * 1.002
-            else:
-                base_price = float(ticker.get('bid') or ticker.get('last') or self.status_data['last_price'])
-                limit_price = base_price * 0.998
+        self.force_sync = True  # 市价后强制下次同步，确保数据最新
 
-            price_str = self._to_precision(price=limit_price)
-            qty_str = self._to_precision(amount=qty)
-            params = {'timeInForce': 'IOC'} 
-            
-            order = self.exchange.create_order(
-                symbol=self.market_symbol, 
-                type='limit', side=side, amount=qty_str, price=price_str, params=params
-            )
-            
-            filled = float(order.get('filled', 0))
-            if filled > 0:
-                self.log(f"[成交确认] IOC订单成交，数量: {filled}")
-                time.sleep(0.5) 
-                self.sync_account_data()
-            else:
-                self.log(f"[未成交] IOC订单被取消")
-
-            self.force_sync = False 
-
-        except Exception as e:
-            err_msg = str(e).lower()
-            if "insufficient" in err_msg or "margin" in err_msg:
-                self.log(f"[严重错误] 保证金不足！策略急停。")
-                self.stop() 
-            else:
-                self.log(f"[纠偏失败] {e}")
-                self.force_sync = False 
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "insufficient" in err_msg or "margin" in err_msg:
+            self.log(f"[严重错误] 保证金不足！策略急停。")
+            self.stop()
+        else:
+            self.log(f"[纠偏失败] {e}")
+            self.force_sync = True  # 失败也强制同步，防止数据陈旧
 
     def manage_maker_orders(self, current_grid_idx):
         if not self.exchange.apiKey: 
