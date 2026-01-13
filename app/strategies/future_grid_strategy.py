@@ -23,6 +23,15 @@ class FutureGridBot:
         self.force_sync = True
         self.sync_interval = 15
         # -----------------------------
+
+        # [新增] Phase 4: 推窗策略核心状态 (增量追加)
+        self.grid_step = 0.0      # 网格步长缓存
+        self.grid_count = 0       # 网格数量缓存
+        self.active_orders = {'buy': {}, 'sell': {}}  # 本地挂单记录 {price: order_id}
+        self.gap_price = 0.0      # 当前空档价格
+        self.state_lock = threading.Lock() # 线程锁确保原子性
+        self.order_qty = float(config.get('amount', 0)) # 缓存下单数量
+        # -----------------------------
         
         # 前端交互的核心数据结构（键名严格匹配前端）
         self.status_data = {
@@ -136,6 +145,10 @@ class FutureGridBot:
             if num < 2: num = 2
             
             step = (upper - lower) / num
+            # [新增] 缓存关键参数供新逻辑使用
+            self.grid_step = step
+            self.grid_count = num
+
             self.grids = [lower + i * step for i in range(num + 1)]
             
             digits = 2 if lower > 100 else (4 if lower > 1 else 6)
@@ -318,6 +331,225 @@ class FutureGridBot:
             pass
         return str(price) if price else str(amount)
 
+    # ==================================================================
+    # [新增] Phase 4: 推窗/队列平移核心逻辑组件
+    # ==================================================================
+    def _cancel_all_orders(self):
+        """[新增] 清空当前交易对的所有挂单"""
+        if not self.exchange or not self.exchange.apiKey: return
+        try:
+            self.exchange.cancel_all_orders(self.market_symbol)
+            self.active_orders = {'buy': {}, 'sell': {}}
+        except Exception:
+            # 兼容不支持 cancel_all 的情况
+            orders = self.exchange.fetch_open_orders(self.market_symbol)
+            for o in orders:
+                try: self.exchange.cancel_order(o['id'], self.market_symbol)
+                except: pass
+            self.active_orders = {'buy': {}, 'sell': {}}
+
+    def _place_order_safe(self, side, price):
+        """[新增] 安全下单包装函数"""
+        if not self.exchange or not self.exchange.apiKey: return
+        
+        # 价格对齐 (假设最小Step)
+        price = round(price / self.grid_step) * self.grid_step
+        
+        # 本地防重
+        if price in self.active_orders[side]:
+            return
+        
+        try:
+            price_str = self._to_precision(price=price)
+            amt_str = self._to_precision(amount=self.order_qty)
+            
+            order = self.exchange.create_order(
+                self.market_symbol, 'limit', side, amt_str, price_str
+            )
+            self.active_orders[side][price] = order['id']
+            # self.log(f"✅ 挂单: {side} @ {price}") 
+        except Exception as e:
+            self.log(f"🛑 下单失败 [{side} {price}]: {e}")
+
+    def _cancel_order_by_price(self, side, price):
+        """[新增] 根据价格查找并撤销订单"""
+        target_id = None
+        target_price_key = None
+        
+        # 模糊匹配价格
+        for p, oid in self.active_orders[side].items():
+            if math.isclose(float(p), float(price), abs_tol=self.grid_step * 0.1):
+                target_id = oid
+                target_price_key = p
+                break
+        
+        if target_id:
+            try:
+                self.exchange.cancel_order(target_id, self.market_symbol)
+                del self.active_orders[side][target_price_key]
+                # self.log(f"♻️ 撤单: {side} @ {price}")
+            except Exception as e:
+                # 订单可能已消失，清理本地记录
+                if "NotFound" in str(e) or "Unknown" in str(e):
+                    if target_price_key in self.active_orders[side]:
+                        del self.active_orders[side][target_price_key]
+                else:
+                    self.log(f"⚠️ 撤单失败: {e}")
+
+    def initialize_grid_orders(self, center_price):
+        """[新增] 启动/纠偏时的静态挂单墙生成"""
+        self.log(f"⚡ 初始化挂单墙，中心价(空档): {center_price}")
+        self._cancel_all_orders()
+        
+        self.gap_price = center_price
+        # 挂单数量限制
+        active_limit = int(self.config.get('active_order_limit', 5))
+        
+        # 下方挂买
+        for i in range(1, active_limit + 1):
+            p = center_price - (i * self.grid_step)
+            self._place_order_safe('buy', p)
+            
+        # 上方挂卖
+        for i in range(1, active_limit + 1):
+            p = center_price + (i * self.grid_step)
+            self._place_order_safe('sell', p)
+            
+        self.update_orders_display_from_memory()
+
+    def _process_grid_shift(self, filled_order):
+        """[新增] 推窗逻辑：仅在成交时触发"""
+        with self.state_lock:
+            side = filled_order['side']
+            fill_price = float(filled_order['price'])
+            amount = float(filled_order['amount'])
+            
+            # 更新状态：成交价即为新空档
+            old_gap = self.gap_price
+            new_gap = fill_price
+            self.gap_price = new_gap
+            
+            self.log(f"🔔 成交 {side} {amount} @ {fill_price} | 空档移动: {old_gap} -> {new_gap}")
+            
+            active_limit = int(self.config.get('active_order_limit', 5))
+            
+            if side == 'sell':
+                # 卖成交 -> 上移
+                target_buy = new_gap - self.grid_step
+                self._place_order_safe('buy', target_buy)
+                
+                target_top_sell = new_gap + (active_limit * self.grid_step)
+                self._place_order_safe('sell', target_top_sell)
+                
+                remove_buy = new_gap - ((active_limit + 1) * self.grid_step)
+                self._cancel_order_by_price('buy', remove_buy)
+                
+            elif side == 'buy':
+                # 买成交 -> 下移
+                target_sell = new_gap + self.grid_step
+                self._place_order_safe('sell', target_sell)
+                
+                target_bottom_buy = new_gap - (active_limit * self.grid_step)
+                self._place_order_safe('buy', target_bottom_buy)
+                
+                remove_sell = new_gap + ((active_limit + 1) * self.grid_step)
+                self._cancel_order_by_price('sell', remove_sell)
+            
+            self.update_orders_display_from_memory()
+
+    def _check_order_status(self):
+        """[新增] 订单状态轮询"""
+        if not self.exchange or not self.exchange.apiKey: return
+
+        try:
+            # 获取当前交易所挂单
+            open_orders = self.exchange.fetch_open_orders(self.market_symbol)
+            open_ids = [o['id'] for o in open_orders]
+            
+            # 找出本地记录中存在，但交易所已不存在的订单
+            filled_candidates = []
+            
+            for side in ['buy', 'sell']:
+                # 使用 list() 复制 keys 避免遍历时修改字典
+                for price, oid in list(self.active_orders[side].items()):
+                    if oid not in open_ids:
+                        filled_candidates.append({'id': oid, 'side': side, 'price': price})
+            
+            for candidate in filled_candidates:
+                try:
+                    order_detail = self.exchange.fetch_order(candidate['id'], self.market_symbol)
+                    status = order_detail['status']
+                    
+                    if status == 'closed': 
+                        # 成交 -> 触发推窗
+                        price_key = candidate['price']
+                        if price_key in self.active_orders[candidate['side']]:
+                            del self.active_orders[candidate['side']][price_key]
+                        
+                        self._process_grid_shift(order_detail)
+                        self.sync_account_data()
+                        
+                    elif status == 'canceled': 
+                        # 撤销 -> 仅清理本地
+                        self.log(f"⚠️ 发现外部撤单: {candidate['side']}")
+                        if candidate['price'] in self.active_orders[candidate['side']]:
+                            del self.active_orders[candidate['side']][candidate['price']]
+                            
+                except Exception as e:
+                    self.log(f"查单失败: {e}")
+                    
+        except Exception as e:
+            self.log(f"状态轮询异常: {e}")
+
+    def update_orders_display_from_memory(self):
+        """[新增] 从内存 active_orders 生成前端显示数据"""
+        try:
+            orders = []
+            amount = self.config['amount']
+            
+            # 估算当前 index
+            current_idx = -1
+            for i, p in enumerate(self.grids):
+                if math.isclose(p, self.gap_price, abs_tol=self.grid_step*0.1):
+                    current_idx = i
+                    break
+            
+            self.status_data['current_grid_idx'] = current_idx
+
+            for i in range(len(self.grids)-1, -1, -1):
+                p = self.grids[i]
+                order_type = "---"
+                style = "text-muted"
+                
+                is_buy = False
+                is_sell = False
+                
+                for bp in self.active_orders['buy'].keys():
+                    if math.isclose(float(bp), p, abs_tol=0.1): is_buy = True
+                
+                for sp in self.active_orders['sell'].keys():
+                    if math.isclose(float(sp), p, abs_tol=0.1): is_sell = True
+                
+                if math.isclose(p, self.gap_price, abs_tol=self.grid_step*0.1):
+                    style = "text-warning bg-dark border border-warning"
+                    order_type = "⚡ 空档(GAP) ⚡"
+                elif is_sell:
+                    order_type = "SELL (挂单)"
+                    style = "text-danger"
+                elif is_buy:
+                    order_type = "BUY (挂单)"
+                    style = "text-success"
+                    
+                orders.append({
+                    "idx": i, "price": p, "type": order_type, "amt": amount, "style": style
+                })
+            
+            self.status_data['orders'] = orders
+        except Exception as e:
+            pass
+
+    # ==================================================================
+
     def adjust_position(self, target_pos):
         current_pos = self.status_data['current_pos']
         amount_per_grid = float(self.config['amount'])
@@ -375,6 +607,8 @@ class FutureGridBot:
                 self.log(f"[纠偏成功] 已强制{side} {filled:.4f}")
                 time.sleep(0.5)
                 self.sync_account_data()
+                # [新增] 纠偏后网格状态已乱，强制重新铺设网格
+                self.initialize_grid_orders(self.status_data['last_price'])
             else:
                 self.log(f"[纠偏警告] 市价单已发但未立即返回成交量")
 
@@ -389,126 +623,7 @@ class FutureGridBot:
                 self.log(f"[纠偏失败] {e}")
                 self.force_sync = True
 
-    def manage_maker_orders(self, current_grid_idx):
-        if not self.exchange.apiKey: 
-            self.update_orders_display(current_grid_idx)
-            return
 
-        try:
-            active_limit = int(self.config.get('active_order_limit', 5))
-            amount = float(self.config['amount'])
-            
-            # === Maker Centric V5: 严格网格纪律 (User Defined) ===
-            mode = self.config.get('strategy_type', 'neutral')
-            
-            # 默认值
-            buy_start_offset = -1
-            sell_start_offset = 1
-            
-            if mode == 'long':
-                # Long 模式 (根据您的要求)
-                # 场景：91350 (Idx 91200)。
-                # 买1 = 91200 (Idx + 0)
-                # 卖1 = 92000 (Idx + 2)
-                # 结果：[91200 Buy] ... [91600 空] ... [92000 Sell]
-                buy_start_offset = 0
-                sell_start_offset = 2
-
-            elif mode == 'short':
-                # Short 模式 (对称逻辑)
-                # 场景：91350 (Idx 91200)。
-                # 卖1 = 91600 (Idx + 1) -> 紧贴当前格顶部开空
-                # 买1 = 90800 (Idx - 1) -> 隔一格平空 (91200空置)
-                # 结果：[90800 Buy] ... [91200 空] ... [91600 Sell]
-                buy_start_offset = -1
-                sell_start_offset = 1
-            
-            start_buy = current_grid_idx + buy_start_offset
-            start_sell = current_grid_idx + sell_start_offset
-            
-            # 动态计算结束点，确保挂单数量固定为 active_limit
-            buy_indices = [i for i in range(start_buy, start_buy - active_limit, -1) if i >= 0]
-            sell_indices = [i for i in range(start_sell, start_sell + active_limit) if i < len(self.grids)]
-            
-            # ====================================================
-            
-            target_buy_prices = {self.grids[i] for i in buy_indices}
-            target_sell_prices = {self.grids[i] for i in sell_indices}
-            
-            open_orders = self.exchange.fetch_open_orders(self.market_symbol)
-            
-            to_cancel_ids = []
-            active_buy_prices = set()
-            active_sell_prices = set()
-
-            for order in open_orders:
-                price = float(order['price'])
-                oid = order['id']
-                side = order['side']
-                is_valid = False
-                
-                if side == 'buy':
-                    for tp in target_buy_prices:
-                        if abs(price - tp) < (tp * 0.0001):
-                            active_buy_prices.add(tp)
-                            is_valid = True
-                            break
-                elif side == 'sell':
-                    for tp in target_sell_prices:
-                        if abs(price - tp) < (tp * 0.0001):
-                            active_sell_prices.add(tp)
-                            is_valid = True
-                            break
-                
-                if not is_valid: to_cancel_ids.append(oid)
-            
-            to_create_specs = [] 
-            for idx in buy_indices:
-                p = self.grids[idx]
-                if p not in active_buy_prices: to_create_specs.append(('buy', p))
-            for idx in sell_indices:
-                p = self.grids[idx]
-                if p not in active_sell_prices: to_create_specs.append(('sell', p))
-
-            def exec_cancel(order_ids):
-                for oid in order_ids:
-                    try:
-                        self.exchange.cancel_order(oid, self.market_symbol)
-                        time.sleep(0.05)
-                    except: pass
-
-            def exec_create(specs):
-                created = False
-                for side, price in specs:
-                    try:
-                        price_str = self._to_precision(price=price)
-                        amt_str = self._to_precision(amount=amount)
-                        self.exchange.create_order(self.market_symbol, 'limit', side, amt_str, price_str)
-                        time.sleep(0.05)
-                        created = True
-                    except Exception as e:
-                        raise e
-                return created
-
-            try:
-                if to_create_specs: 
-                    if exec_create(to_create_specs):
-                        self.force_sync = True 
-
-                if to_cancel_ids: 
-                    exec_cancel(to_cancel_ids)
-                    
-            except Exception as e:
-                if "insufficient" in str(e).lower() or "margin" in str(e).lower():
-                    self.log(f"[资金优化] 保证金紧张，执行先撤后补...")
-                    if to_cancel_ids: exec_cancel(to_cancel_ids)
-                else:
-                    self.log(f"[挂单异常] {e}")
-
-            self.update_orders_display(current_grid_idx)
-            
-        except Exception as e:
-            self.log(f"[挂单维护崩溃] {e}")
 
     def update_orders_display(self, current_idx):
         orders = []
@@ -558,17 +673,21 @@ class FutureGridBot:
             return
 
         if self.check_risk_management(): return
+        
+        # [修改] Phase 4 逻辑接管
+        # 1. 优先执行订单状态检查 (推窗逻辑)
+        self._check_order_status()
 
+        # 2. Watchdog 纠偏 (保留原逻辑作为低频兜底)
         now = time.time()
-        new_grid_idx = self.calculate_grid_index(current_price)
-        self.status_data['current_grid_idx'] = new_grid_idx
         
+        # 只有在初始化或定时同步时才执行 Watchdog
         should_sync = False
-        
+        new_grid_idx = self.calculate_grid_index(current_price) # 用于 Watchdog 计算理论仓位
+
         if self.force_sync:
             should_sync = True
-        elif new_grid_idx != self.last_grid_idx:
-            should_sync = True
+            self.force_sync = False
         elif (now - self.last_sync_time) > self.sync_interval:
             should_sync = True
 
@@ -576,7 +695,7 @@ class FutureGridBot:
             self.sync_account_data()
             target_pos = self.calculate_target_position(new_grid_idx)
             self.adjust_position(target_pos)
-            self.manage_maker_orders(new_grid_idx)
+            # self.manage_maker_orders(new_grid_idx) # [修改] 已废弃
             
             self.last_grid_idx = new_grid_idx
             self.last_sync_time = now
@@ -635,20 +754,26 @@ class FutureGridBot:
                     start_price = sum(self.grids) / len(self.grids)
                 self.status_data['last_price'] = start_price
                 self.status_data['current_price'] = start_price
+                
+                # 对齐网格步长
+                if self.grid_step > 0:
+                    start_price = round(start_price / self.grid_step) * self.grid_step
 
-                idx = self.calculate_grid_index(start_price)
-                self.update_orders_display(idx)
-                self.log(f"[系统] 初始挂单墙已生成，当前价: {start_price}")
+                # [修改] 使用新的初始化逻辑生成挂单墙
+                self.initialize_grid_orders(start_price)
+                
+                self.log(f"[系统] 初始挂单墙已生成，中心价: {start_price}")
             except Exception as e:
                 self.log(f"[警告] 初始价格获取失败: {e}")
                 self.update_orders_display(-1)
 
             mode = self.config.get('strategy_type', 'neutral')
-            self.log(f"[合约] 策略初始化完成 (Phase 3 Engine) | 模式: {mode}")
+            self.log(f"[合约] 策略初始化完成 (Phase 4 Event Driven) | 模式: {mode}")
 
-            if start_price > 0:
-                self.log("[系统] 执行首单建仓...")
-                self.run_step(start_price)
+            # [修改] 移除首单建仓，改由 Watchdog 在首次同步时自动处理
+            # if start_price > 0:
+            #     self.log("[系统] 执行首单建仓...")
+            #     self.run_step(start_price)
 
             self._main_loop()
 
@@ -674,20 +799,19 @@ class FutureGridBot:
     def pause(self):
         self.paused = True
         self.log("[指令] 策略已暂停！")
-        if self.exchange and self.exchange.apiKey:
-            try:
-                open_orders = self.exchange.fetch_open_orders(self.market_symbol)
-                for order in open_orders:
-                    try: self.exchange.cancel_order(order['id'], self.market_symbol)
-                    except: pass
-                self.log("[系统] 挂单已全部撤销")
-            except Exception as e: 
-                self.log(f"[暂停撤单失败] {e}")
+        # [修改] 使用新版撤单逻辑
+        self._cancel_all_orders()
+        self.log("[系统] 挂单已全部撤销")
 
     def resume(self):
         self.paused = False
         self.force_sync = True 
         self.log("[指令] 策略恢复运行！")
+        # [新增] 恢复时重新初始化挂单
+        try:
+            current = self.status_data['last_price']
+            self.initialize_grid_orders(current)
+        except: pass
 
     def stop(self):
         self.log("[指令] 正在停止... 撤单并平仓")
@@ -699,10 +823,8 @@ class FutureGridBot:
 
         if self.exchange and self.exchange.apiKey:
             try:
-                open_orders = self.exchange.fetch_open_orders(self.market_symbol)
-                for order in open_orders:
-                    try: self.exchange.cancel_order(order['id'], self.market_symbol)
-                    except: pass
+                # [修改] 使用新版撤单逻辑
+                self._cancel_all_orders()
                 
                 positions = self.exchange.fetch_positions([self.market_symbol])
                 for pos in positions:
