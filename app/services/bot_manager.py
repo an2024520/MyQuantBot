@@ -7,6 +7,7 @@ from app.services.monitor import add_log
 class BotManager:
     _future_bot = None  # 单例实例
     STATE_FILE = "bot_state.json"  # 【新增】状态存档文件
+    EXTERNAL_STATE_PATH = "/opt/myquant_config/bot_state.json"
 
     @classmethod
     def get_bot(cls):
@@ -77,7 +78,43 @@ class BotManager:
         if 'active_order_limit' in updates and updates['active_order_limit']:
             cls._future_bot.config['active_order_limit'] = int(updates['active_order_limit'])
             updated_keys.append('挂单数')
+            
+        # [新增] 扩展：支持格数、区间、金额等核心参数更新
+        if 'grid_count' in updates and updates['grid_count']:
+            cls._future_bot.config['grid_count'] = int(updates['grid_count'])
+            updated_keys.append('格数')
+
+        if 'upper_price' in updates and updates['upper_price']:
+            cls._future_bot.config['upper_price'] = float(updates['upper_price'])
+            updated_keys.append('上限')
+
+        if 'lower_price' in updates and updates['lower_price']:
+            cls._future_bot.config['lower_price'] = float(updates['lower_price'])
+            updated_keys.append('下限')
+            
+        if 'amount' in updates and updates['amount']:
+            val = float(updates['amount'])
+            cls._future_bot.config['amount'] = val
+            cls._future_bot.order_qty = val # 同步更新缓存
+            updated_keys.append('金额')
         
+        # [新增] 软重启逻辑：重算网格 + 重置挂单
+        if updated_keys:
+            try:
+                # 1. 重新计算网格数组
+                cls._future_bot.generate_grids()
+                
+                # 2. 获取当前价格并重置挂单墙
+                current_price = cls._future_bot.status_data.get('last_price', 0)
+                if current_price > 0:
+                    cls._future_bot.initialize_grid_orders(current_price)
+                    add_log(f"[Soft Restart] 参数已热更新，网格重置完成")
+                else:
+                    add_log(f"[Soft Restart] 警告: 未获取到有效价格，仅更新参数")
+                    
+            except Exception as e:
+                add_log(f"[Soft Restart] 热更新失败: {e}")
+
         # 【新增】参数更新后，保存最新配置到磁盘
         if updated_keys:
             cls.save_state()
@@ -101,7 +138,12 @@ class BotManager:
             state["config"] = cls._future_bot.config
         
         try:
-            with open(cls.STATE_FILE, 'w', encoding='utf-8') as f:
+            # 确保存储目录存在
+            config_dir = os.path.dirname(cls.EXTERNAL_STATE_PATH)
+            if config_dir and not os.path.exists(config_dir):
+                os.makedirs(config_dir, exist_ok=True)
+
+            with open(cls.EXTERNAL_STATE_PATH, 'w', encoding='utf-8') as f:
                 json.dump(state, f, indent=4, ensure_ascii=False)
             # print(f">>> [System] 状态已保存: {state['running']}") 
         except Exception as e:
@@ -110,11 +152,18 @@ class BotManager:
     @classmethod
     def load_state(cls):
         """启动时从硬盘恢复状态"""
-        if not os.path.exists(cls.STATE_FILE):
-            return
+        # 优先读取外部配置
+        state_file = cls.EXTERNAL_STATE_PATH
+        if not os.path.exists(state_file):
+            # 回退到本地默认文件 (首次运行或迁移)
+            if os.path.exists(cls.STATE_FILE):
+                state_file = cls.STATE_FILE
+                add_log("[系统] 外部状态未找到，使用本地默认存档")
+            else:
+                return
             
         try:
-            with open(cls.STATE_FILE, 'r', encoding='utf-8') as f:
+            with open(state_file, 'r', encoding='utf-8') as f:
                 state = json.load(f)
             
             # 如果存档显示之前是运行状态，则自动重启
