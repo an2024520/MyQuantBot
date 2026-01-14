@@ -25,8 +25,17 @@
         }
         .btn-verify:hover { background: #157347; border-color: #146c43; }
         
-        .grid-wall { height: 500px; overflow-y: auto; background: #050505; }
+        .grid-wall { height: calc(100vh - 240px); overflow-y: auto; background: #050505; }
+        .log-box { height: calc(100vh - 200px); overflow-y: auto; color: #888; font-family: Consolas, monospace; font-size: 12px; }
         .grid-row { display: flex; justify-content: space-between; padding: 4px 10px; border-bottom: 1px solid #222; }
+        
+        .dot-indicator {
+            height: 10px; width: 10px; border-radius: 50%; display: inline-block;
+            background-color: #666; transition: background-color 0.3s;
+            animation: breathing 2s infinite ease-in-out;
+        }
+        @keyframes breathing { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
+
         .risk-val { font-size: 1.1rem; font-weight: bold; color: #fff; }
         .risk-label { color: #666; font-size: 0.8rem; }
         .pos-long { color: #0ecb81; }
@@ -39,6 +48,13 @@
 </head>
 <body>
 <div class="container-fluid">
+    <div class="row mb-2 mt-2 align-items-center">
+        <div class="col-12 d-flex align-items-center">
+             <h5 class="m-0 text-warning">合约网格终端 v8.0</h5>
+             <span id="uptime-display" class="ms-3 font-monospace text-muted small"></span>
+             <span id="heartbeat-dot" class="dot-indicator ms-3"></span>
+        </div>
+    </div>
     <div class="row">
         <div class="col-md-3">
             <div class="card border-warning">
@@ -207,14 +223,30 @@
         
         <div class="col-md-3">
             <div class="card h-100">
-                <div class="card-header">日志</div>
-                <div class="log-box" id="logs" style="height:600px;overflow-y:auto;color:#888;"></div>
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>日志</span>
+                    <div class="d-flex align-items-center">
+                         <div class="form-check form-switch m-0 me-2">
+                            <input class="form-check-input" type="checkbox" id="auto-scroll" checked>
+                            <label class="form-check-label small" for="auto-scroll">自动滚动</label>
+                         </div>
+                         <button class="btn btn-outline-secondary btn-sm p-0 px-2" onclick="clearLogs()">清空</button>
+                    </div>
+                </div>
+                <div class="log-box" id="logs"></div>
             </div>
         </div>
     </div>
 </div>
 
 <script>
+    let startTimeLocal = null;
+    let lastRunningState = false;
+
+    function clearLogs() {
+        document.getElementById('logs').innerHTML = '';
+    }
+
     function start() {
         const formData = new FormData(document.getElementById('configForm'));
         const data = Object.fromEntries(formData);
@@ -347,8 +379,40 @@
                 document.getElementById('grid-wall').innerHTML = html;
             }
 
+            // Heartbeat
+            const dot = document.getElementById('heartbeat-dot');
+            if(dot) {
+                dot.style.backgroundColor = '#0ecb81';
+                setTimeout(() => dot.style.backgroundColor = '#666', 200);
+            }
+
+            // Uptime Logic
+            if (d.running) {
+                if (!lastRunningState) startTimeLocal = Date.now(); 
+                lastRunningState = true;
+                if (startTimeLocal) {
+                    const diff = Math.floor((Date.now() - startTimeLocal) / 1000);
+                    const h = Math.floor(diff / 3600);
+                    const m = Math.floor((diff % 3600) / 60);
+                    const s = diff % 60;
+                    document.getElementById('uptime-display').innerText = `Running: ${h}h ${m}m ${s}s`;
+                }
+            } else {
+                lastRunningState = false;
+                startTimeLocal = null;
+                document.getElementById('uptime-display').innerText = 'Stopped';
+            }
+
             if (d.logs && d.logs.length) {
-                document.getElementById('logs').innerHTML = d.logs.map(l => `<div>${l}</div>`).join('');
+                const logBox = document.getElementById('logs');
+                const shouldScroll = document.getElementById('auto-scroll').checked;
+                // Render last 200 only
+                const slicedLogs = d.logs.slice(-200);
+                logBox.innerHTML = slicedLogs.map(l => `<div>${l}</div>`).join('');
+                
+                if (shouldScroll) {
+                    logBox.scrollTop = logBox.scrollHeight;
+                }
             }
         });
     }, 1500);
