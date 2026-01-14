@@ -45,18 +45,7 @@ class FutureGridSyncMixin:
             
             self.status_data['liquidation'] = self.status_data['liquidation_price']
 
-            if self.status_data['current_pos'] != 0 and self.status_data['entry_price'] > 0:
-                if self.status_data['liquidation_price'] <= 0:
-                    leverage = int(self.config.get('leverage', 1))
-                    entry = self.status_data['entry_price']
-                    if self.status_data['current_pos'] > 0:
-                        liq = entry * (1 - 1/leverage + 0.005)
-                    else:
-                        liq = entry * (1 + 1/leverage - 0.005)
-                    liq = round(liq, 4 if entry > 1 else 2)
-                    self.status_data['liquidation_price'] = liq
-                    self.status_data['liquidation'] = liq
-                    self.log(f"[风控] API强平价无效，手动计算 ≈ {liq}")
+
 
             self.last_sync_time = time.time() 
             
