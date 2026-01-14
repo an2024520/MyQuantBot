@@ -4,6 +4,7 @@ import ccxt
 from config import Config  # 【新增】
 from app.services.monitor import SharedState, add_log
 from app.services.bot_manager import BotManager
+import json, os
 
 bp = Blueprint('api', __name__)
 
@@ -22,6 +23,36 @@ def set_timeframe():
         SharedState.watch_settings[symbol] = tf
         return jsonify({"status": "ok"})
     return jsonify({"status": "error"})
+
+@bp.route('/system/update_source', methods=['POST'])
+def update_source():
+    try:
+        data = request.json
+        new_source = data.get('source')
+        if new_source not in ['binance', 'okx', 'coinbase']:
+            return jsonify({"status": "error", "msg": "Invalid source"})
+            
+        # 1. 更新内存状态，通知 Monitor 线程切换
+        SharedState.target_source = new_source
+        
+        # 2. 持久化到 bot_state.json (复用 BotManager 的路径定义)
+        # 注意: 这里只更新 market_source 字段，不覆盖其他
+        state_path = BotManager.EXTERNAL_STATE_PATH
+        state = {}
+        
+        if os.path.exists(state_path):
+            with open(state_path, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+                
+        state['market_source'] = new_source
+        
+        with open(state_path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=4, ensure_ascii=False)
+            
+        add_log(f"[系统] 行情源已切换为 {new_source} (已持久化)")
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)})
 
 @bp.route('/check_balance', methods=['POST'])
 def check_balance():

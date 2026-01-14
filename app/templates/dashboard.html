@@ -1,105 +1,276 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <title>MyQuant 主控台 v6.0</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background: #0b0e11; color: #eaecef; padding: 20px; font-family: 'Segoe UI', sans-serif; }
-        
-        .monitor-card { background: #1e2329; border: 1px solid #2b3139; border-radius: 8px; margin-bottom: 20px; overflow: hidden; position: relative; }
-        .price-section { padding: 15px; border-bottom: 1px solid #2b3139; text-align: center; }
-        .coin-title { font-size: 1.1rem; color: #848e9c; margin-bottom: 5px; font-weight: 600; }
-        .price-big { font-size: 2.2rem; font-weight: bold; color: #f0b90b; letter-spacing: 1px; }
-        
-        .control-bar { background: #161a1e; padding: 8px 15px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2b3139; }
-        .tf-select { background: #2b3139; color: #eaecef; border: 1px solid #474d57; font-size: 12px; padding: 2px 5px; border-radius: 4px; cursor: pointer; outline: none; }
-        .tf-select:focus { border-color: #f0b90b; }
-        
-        .indicator-section { padding: 15px; font-size: 0.9rem; }
-        .ind-row { display: flex; justify-content: space-between; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed #2b3139; }
-        .ind-row:last-child { border-bottom: none; margin-bottom: 0; }
-        .label { color: #848e9c; }
-        
-        .val-blue { color: #2962FF; font-weight: bold; }
-        .val-up { color: #0ecb81; }
-        .val-down { color: #f6465d; }
-        
-        .strategy-btn { width: 100%; padding: 15px; border: none; font-weight: bold; color: #000; border-radius: 8px; font-size: 1.1rem; transition: transform 0.2s; margin-bottom: 15px; }
-        .strategy-btn:hover { transform: translateY(-2px); }
-        .btn-spot { background: linear-gradient(135deg, #f0b90b 0%, #d8a70a 100%); }
-        .btn-future { background: linear-gradient(135deg, #e1e1e1 0%, #999 100%); border: 2px solid #f0b90b; }
+        body {
+            background: #0b0e11;
+            color: #eaecef;
+            padding: 20px;
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        .monitor-card {
+            background: #1e2329;
+            border: 1px solid #2b3139;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .price-section {
+            padding: 15px;
+            border-bottom: 1px solid #2b3139;
+            text-align: center;
+        }
+
+        .coin-title {
+            font-size: 1.1rem;
+            color: #848e9c;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+
+        .price-big {
+            font-size: 2.2rem;
+            font-weight: bold;
+            color: #f0b90b;
+            letter-spacing: 1px;
+        }
+
+        .control-bar {
+            background: #161a1e;
+            padding: 8px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #2b3139;
+        }
+
+        .tf-select {
+            background: #2b3139;
+            color: #eaecef;
+            border: 1px solid #474d57;
+            font-size: 12px;
+            padding: 2px 5px;
+            border-radius: 4px;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .tf-select:focus {
+            border-color: #f0b90b;
+        }
+
+        .indicator-section {
+            padding: 15px;
+            font-size: 0.9rem;
+        }
+
+        .ind-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px dashed #2b3139;
+        }
+
+        .ind-row:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+        }
+
+        .label {
+            color: #848e9c;
+        }
+
+        .val-blue {
+            color: #2962FF;
+            font-weight: bold;
+        }
+
+        .val-up {
+            color: #0ecb81;
+        }
+
+        .val-down {
+            color: #f6465d;
+        }
+
+        .strategy-btn {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            font-weight: bold;
+            color: #000;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            transition: transform 0.2s;
+            margin-bottom: 15px;
+        }
+
+        .strategy-btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .btn-spot {
+            background: linear-gradient(135deg, #f0b90b 0%, #d8a70a 100%);
+        }
+
+        .btn-future {
+            background: linear-gradient(135deg, #e1e1e1 0%, #999 100%);
+            border: 2px solid #f0b90b;
+        }
     </style>
 </head>
+
 <body>
-<div class="container" style="max-width: 1200px;">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h3 class="text-light m-0">🌍 全市场监控</h3>
-        <span class="badge bg-dark border border-secondary">按需订阅 · 实时数据</span>
-    </div>
-    
-    <div class="row" id="market-row">
-        <div class="col-12 text-center text-muted py-5">
-            <div class="spinner-border text-warning" role="status"></div>
-            <div class="mt-2">正在连接行情数据中心...</div>
+    <div class="container" style="max-width: 1200px;">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h3 class="text-light m-0">🌍 全市场监控</h3>
+            <div class="d-flex align-items-center">
+                <!-- 【新增】数据源切换 -->
+                <select id="market-source" class="form-select form-select-sm bg-dark text-light border-secondary me-3"
+                    style="width: 120px;" onchange="changeSource(this.value)">
+                    <option value="binance">Binance</option>
+                    <option value="okx">OKX</option>
+                    <option value="coinbase">Coinbase</option>
+                </select>
+
+                <!-- 【新增】双时区时钟 -->
+                <span class="badge bg-dark border border-secondary p-2 me-3"
+                    style="font-family: monospace; font-size: 0.9rem;">
+                    <span id="clock-bj">--:--</span> <span class="text-muted">|</span> <span id="clock-ny">--:--</span>
+                </span>
+
+                <span class="badge bg-dark border border-secondary">按需订阅 · 实时数据 <small id="latency-val"
+                        class="ms-1 val-up">-- ms</small></span>
+            </div>
+        </div>
+
+        <div class="row" id="market-row">
+            <div class="col-12 text-center text-muted py-5">
+                <div class="spinner-border text-warning" role="status"></div>
+                <div class="mt-2">正在连接行情数据中心...</div>
+            </div>
+        </div>
+
+        <h4 class="mt-5 mb-3 text-light">🚀 策略控制中心</h4>
+        <div class="row">
+
+
+            <div class="col-md-4">
+                <button class="strategy-btn btn-future" onclick="window.open('/future_grid_panel', '_blank')">
+                    <span>🔥 合约网格 (Futures)</span>
+                    <div style="font-size: 0.8rem; font-weight: normal; margin-top: 5px; opacity: 0.8;">
+                        支持杠杆 · 资金费率 · 双向持仓
+                    </div>
+                </button>
+            </div>
         </div>
     </div>
 
-    <h4 class="mt-5 mb-3 text-light">🚀 策略控制中心</h4>
-    <div class="row">
-
-        
-        <div class="col-md-4">
-            <button class="strategy-btn btn-future" onclick="window.open('/future_grid_panel', '_blank')">
-                <span>🔥 合约网格 (Futures)</span>
-                <div style="font-size: 0.8rem; font-weight: normal; margin-top: 5px; opacity: 0.8;">
-                    支持杠杆 · 资金费率 · 双向持仓
-                </div>
-            </button>
-        </div>
     </div>
-</div>
 
-<script>
-    const ALL_TFS = ['5m', '15m', '1h', '2h', '4h', '8h', '12h', '1d'];
-    
-    // 乐观UI记录本：防止下拉框在数据刷新轮回时跳变
-    const pendingTFs = {}; 
+    <script>
+        // 【新增】双时区时钟
+        function updateClock() {
+            const now = new Date();
 
-    function renderMarket(data) {
-        // 如果用户正在操作下拉框，暂停渲染
-        const activeElement = document.activeElement;
-        if (activeElement && activeElement.tagName === 'SELECT') return;
+            // 北京时间 (UTC+8)
+            const bjTime = new Date(now.getTime() + (now.getTimezoneOffset() * 60000) + (3600000 * 8));
+            document.getElementById('clock-bj').innerText = "BJ " + bjTime.toLocaleTimeString('en-GB', { hour12: false });
 
-        const container = document.getElementById('market-row');
-        let html = '';
-        
-        for (const [symbol, d] of Object.entries(data)) {
-            const smiVal = Number(d.smi).toFixed(5);
-            const sigVal = Number(d.sig).toFixed(5);
-            const rsiVal = Number(d.rsi).toFixed(2);
-            const rsiClass = d.rsi > 70 ? 'val-down' : (d.rsi < 30 ? 'val-up' : 'text-light');
-            
-            // --- 智能周期判断 ---
-            let displayTF = d.tf; 
-            if (pendingTFs[symbol]) {
-                // 如果后端已经更新到我们想要的周期，清除 pending
-                if (pendingTFs[symbol] === d.tf) {
-                    delete pendingTFs[symbol];
-                } else {
-                    // 后端还没跟上，强制显示前端选择的周期
-                    displayTF = pendingTFs[symbol];
-                }
+            // 纽约时间 (America/New_York is typically UTC-4 or UTC-5, simplified here or use logic)
+            // 简单处理：北京时间 - 12小时 (大致) 或者使用 Intl
+            const nyTime = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            document.getElementById('clock-ny').innerText = "NY " + nyTime;
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // 【新增】切换数据源
+        function changeSource(source) {
+            if (!confirm(`确认切换行情源到 ${source}? 可能会有短暂数据中断。`)) {
+                // 恢复原选项 (需要记录当前状态，这里简化处理，直接刷新)
+                location.reload();
+                return;
             }
-            // ------------------
-            
-            let optionsHtml = '';
-            ALL_TFS.forEach(tf => {
-                const isSelected = (displayTF === tf) ? 'selected' : '';
-                optionsHtml += `<option value="${tf}" ${isSelected}>${tf}</option>`;
-            });
 
-			const slug = symbol.replace('/', '_');
-			html += `
+            fetch('/api/system/update_source', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source: source })
+            }).then(r => r.json()).then(res => {
+                if (res.status === 'ok') {
+                    alert('切换成功，数据源已更新');
+                } else {
+                    alert('切换失败: ' + res.msg);
+                }
+            });
+        }
+
+        const ALL_TFS = ['5m', '15m', '1h', '2h', '4h', '8h', '12h', '1d'];
+
+        // 乐观UI记录本：防止下拉框在数据刷新轮回时跳变
+        const pendingTFs = {};
+
+        function renderMarket(data) {
+            // 如果用户正在操作下拉框，暂停渲染
+            const activeElement = document.activeElement;
+            if (activeElement && activeElement.tagName === 'SELECT') return;
+
+            const container = document.getElementById('market-row');
+            let html = '';
+
+            for (const [symbol, d] of Object.entries(data)) {
+                const smiVal = Number(d.smi).toFixed(5);
+                const sigVal = Number(d.sig).toFixed(5);
+                const rsiVal = Number(d.rsi).toFixed(2);
+
+                // 【新增】更新延迟显示 (取第一个有效数据的 latency)
+                if (d.latency !== undefined) {
+                    const latEl = document.getElementById('latency-val');
+                    if (latEl) {
+                        latEl.innerText = d.latency + " ms";
+                        latEl.className = "ms-1 " + (d.latency < 200 ? "val-up" : (d.latency > 500 ? "val-down" : "text-warning"));
+                    }
+                }
+
+                // 【新增】更新下拉框状态 (如果后端源变了，前端自动对齐)
+                if (d.source) {
+                    const sourceSel = document.getElementById('market-source');
+                    if (sourceSel && sourceSel.value !== d.source && document.activeElement !== sourceSel) {
+                        sourceSel.value = d.source;
+                    }
+                }
+
+                const rsiClass = d.rsi > 70 ? 'val-down' : (d.rsi < 30 ? 'val-up' : 'text-light');
+
+                // --- 智能周期判断 ---
+                let displayTF = d.tf;
+                if (pendingTFs[symbol]) {
+                    // 如果后端已经更新到我们想要的周期，清除 pending
+                    if (pendingTFs[symbol] === d.tf) {
+                        delete pendingTFs[symbol];
+                    } else {
+                        // 后端还没跟上，强制显示前端选择的周期
+                        displayTF = pendingTFs[symbol];
+                    }
+                }
+                // ------------------
+
+                let optionsHtml = '';
+                ALL_TFS.forEach(tf => {
+                    const isSelected = (displayTF === tf) ? 'selected' : '';
+                    optionsHtml += `<option value="${tf}" ${isSelected}>${tf}</option>`;
+                });
+
+                const slug = symbol.replace('/', '_');
+                html += `
             <div class="col-md-4">
                 <div class="monitor-card">
                     <div class="price-section" style="cursor:pointer;" onclick="window.location.href='/chart/${slug}'">
@@ -132,33 +303,34 @@
                     </div>
                 </div>
             </div>`;
+            }
+
+            container.innerHTML = html;
         }
-        
-        container.innerHTML = html;
-    }
 
-    function changeTF(el, symbol, newTF) {
-        // 1. 自动失焦，允许界面恢复刷新
-        el.blur();
-        
-        // 2. 记在小本本上，强制锁定UI显示
-        pendingTFs[symbol] = newTF;
-        
-        // 3. 发送指令
-        fetch('/api/set_timeframe', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ symbol: symbol, tf: newTF })
-        }).then(r => r.json()).then(res => {
-            console.log(`[Switch] ${symbol} -> ${newTF}`);
-        });
-    }
+        function changeTF(el, symbol, newTF) {
+            // 1. 自动失焦，允许界面恢复刷新
+            el.blur();
 
-    setInterval(() => {
-        fetch('/api/market_status').then(r => r.json()).then(data => {
-            renderMarket(data);
-        });
-    }, 2000);
-</script>
+            // 2. 记在小本本上，强制锁定UI显示
+            pendingTFs[symbol] = newTF;
+
+            // 3. 发送指令
+            fetch('/api/set_timeframe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbol: symbol, tf: newTF })
+            }).then(r => r.json()).then(res => {
+                console.log(`[Switch] ${symbol} -> ${newTF}`);
+            });
+        }
+
+        setInterval(() => {
+            fetch('/api/market_status').then(r => r.json()).then(data => {
+                renderMarket(data);
+            });
+        }, 2000);
+    </script>
 </body>
+
 </html>

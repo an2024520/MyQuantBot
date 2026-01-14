@@ -10,6 +10,7 @@ from config import Config  # 【新增】引入配置
 class SharedState:
     market_data = {}  # { 'BTC/USDT': {...} }
     system_logs = deque(maxlen=200) 
+    target_source = getattr(Config, 'MARKET_SOURCE', 'binance') # 【新增】目标数据源 (用于热切换) 
     
     # 监控列表 (前端显示用)
     watch_settings = {
@@ -58,21 +59,36 @@ def market_monitor_thread():
     
     print(">>> [System] 智能监控服务已启动...")
     
+    # 【新增】热切换检测
+    current_source_name = Config.MARKET_SOURCE
+
     while True:
         try:
+            # 0. 检查源切换
+            if SharedState.target_source != current_source_name:
+                add_log(f"[Monitor] 切换行情源: {current_source_name} -> {SharedState.target_source}")
+                # 动态修改 Config (虽然 Config 是单例，但这里修改内存值以欺骗 get_public_exchange)
+                Config.MARKET_SOURCE = SharedState.target_source
+                exchange = get_public_exchange()
+                current_source_name = SharedState.target_source
+
             for display_symbol in symbols:
                 # 【新增】智能符号适配 (Smart Adapter)
                 query_symbol = display_symbol
                 
                 # 如果是 Coinbase，它主力是 USD，这里做隐式映射
                 # 前端看 BTC/USDT -> 后台查 BTC/USD
-                if Config.MARKET_SOURCE == 'coinbase' and 'USDT' in display_symbol:
+                if current_source_name == 'coinbase' and 'USDT' in display_symbol:
                     query_symbol = display_symbol.replace('USDT', 'USD')
                 
-                # 1. 获取价格
+                # 1. 获取价格 & 计算延迟
+                latency = 0
                 try:
+                    t1 = time.time()
                     ticker = exchange.fetch_ticker(query_symbol)
+                    t2 = time.time()
                     current_price = float(ticker['last'])
+                    latency = int((t2 - t1) * 1000) # ms
                 except Exception as e:
                     # 偶尔报错不打印，防止刷屏
                     continue
@@ -93,7 +109,8 @@ def market_monitor_thread():
                         "rsi": round(rsi, 2) if rsi else 0,
                         "smi": round(smi, 5) if smi else 0,
                         "sig": round(sig, 5) if sig else 0,
-                        "source": Config.MARKET_SOURCE # 标记来源
+                        "source": current_source_name, # 标记来源
+                        "latency": latency # 【新增】延迟
                     }
                 except:
                     continue
