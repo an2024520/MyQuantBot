@@ -1,8 +1,12 @@
 # app/services/monitor.py
 import threading
 import time
+import psutil
+import json
+import os
 import ccxt
 from collections import deque
+from app.utils.notifier import send_message
 from app.utils.indicators import calculate_rsi, calculate_smi
 from config import Config  # 【新增】引入配置
 
@@ -13,10 +17,9 @@ class SharedState:
     target_source = getattr(Config, 'MARKET_SOURCE', 'binance') # 【新增】目标数据源 (用于热切换) 
     
     # 监控列表 (前端显示用)
-    watch_settings = {
-        "BTC/USDT": "1h", "ETH/USDT": "1h", "SOL/USDT": "1h",
-        "BTC/USDC": "1h", "ETH/USDC": "1h", "SOL/USDC": "1h"
-    }
+    # 监控列表 (前端显示用)
+    watch_settings = {"BTC/USDT": "1h"}
+    last_alert_time = 0
 
 def add_log(msg):
     ts = time.strftime("%H:%M:%S")
@@ -121,6 +124,64 @@ def market_monitor_thread():
                     # 注意：机器人自己有 fetch_market_data，这里仅作为 fallback 或触发器
                     # 实际交易中，机器人使用自己的行情源，这里不需要频繁驱动
                     pass 
+
+            # === A. 获取系统状态 (System Stats) ===
+            try:
+                cpu = psutil.cpu_percent()
+                mem = psutil.virtual_memory().percent
+                net = psutil.net_io_counters()
+                sent_gb = round(net.bytes_sent / (1024**3), 2)
+                recv_gb = round(net.bytes_recv / (1024**3), 2)
+                
+                # [Trick] 将系统状态挂载到 BTC 数据包中，利用现有 API 传给前端
+                if "BTC/USDT" in SharedState.market_data:
+                    SharedState.market_data["BTC/USDT"]["sys_cpu"] = cpu
+                    SharedState.market_data["BTC/USDT"]["sys_mem"] = mem
+                    SharedState.market_data["BTC/USDT"]["sys_net"] = f"↑{sent_gb}G ↓{recv_gb}G"
+            except: pass
+
+            # === B. 哨兵报警逻辑 (Sentinel Alert) ===
+            try:
+                # 1. 读取配置 (静默读取，失败不报错)
+                config_path = "/opt/myquantbot/autopilot_config.json"
+                if not os.path.exists(config_path):
+                    config_path = "autopilot_config.json" # Local fallback
+                
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    ap_config = json.load(f)
+                
+                # 2. 检查 SMI 触发
+                btc_data = SharedState.market_data.get("BTC/USDT", {})
+                current_smi = btc_data.get("smi")
+                
+                if current_smi is not None:
+                    triggers = ap_config.get('sentinel', {}).get('triggers', {})
+                    long_open = triggers.get('long_open', -0.46)
+                    short_open = triggers.get('short_open', 0.46)
+                    
+                    is_triggered = False
+                    msg_type = ""
+                    
+                    if current_smi < long_open:
+                        is_triggered = True
+                        msg_type = f"🟢 机会: SMI ({current_smi}) 低于 {long_open}"
+                    elif current_smi > short_open:
+                        is_triggered = True
+                        msg_type = f"🔴 风险: SMI ({current_smi}) 高于 {short_open}"
+                    
+                    # 3. 冷却时间检查
+                    notify_cfg = ap_config.get('notification', {})
+                    interval = int(notify_cfg.get('interval_minutes', 15)) * 60
+                    
+                    if is_triggered and (time.time() - SharedState.last_alert_time > interval):
+                        # 发送消息
+                        full_msg = f"{msg_type}\n当前价格: {btc_data.get('price')}\nCPU: {cpu}% MEM: {mem}%"
+                        send_message(ap_config, full_msg)
+                        SharedState.last_alert_time = time.time()
+            except Exception as e:
+                # 避免报警逻辑导致主循环崩溃
+                # print(f"[Sentinel Error] {e}") 
+                pass
 
             time.sleep(2)
             

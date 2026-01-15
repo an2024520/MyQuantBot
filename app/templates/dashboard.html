@@ -146,6 +146,48 @@
                     <span id="clock-bj">--:--</span> <span class="text-muted">|</span> <span id="clock-ny">--:--</span>
                 </span>
 
+<span class="badge bg-dark border border-secondary p-2 me-3 text-warning">
+    <span id="sys-stat-text">CPU: --% | MEM: --%</span>
+</span>
+
+<button class="btn btn-sm btn-outline-secondary me-3" data-bs-toggle="modal" data-bs-target="#settingsModal">
+    ⚙️ 设置
+</button>
+
+<div class="modal fade" id="settingsModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content" style="background:#1e2329; color:#fff; border:1px solid #3b3f46;">
+            <div class="modal-header" style="border-bottom:1px solid #2b3139;">
+                <h5 class="modal-title">🔔 通知设置 (Blind Config)</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label text-muted">Telegram Token</label>
+                    <input type="password" class="form-control bg-dark text-white border-secondary" id="tg_token" placeholder="输入 Token (不回显)">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label text-muted">Telegram Chat ID</label>
+                    <input type="password" class="form-control bg-dark text-white border-secondary" id="tg_chat_id" placeholder="输入 Chat ID (不回显)">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label text-muted">Discord Webhook</label>
+                    <input type="password" class="form-control bg-dark text-white border-secondary" id="discord_webhook" placeholder="输入 Webhook URL (不回显)">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label text-muted">报警冷却间隔 (分钟)</label>
+                    <input type="number" class="form-control bg-dark text-white border-secondary" id="alert_interval" value="15">
+                </div>
+                <small class="text-muted">* 敏感信息仅用于写入，刷新页面后不会显示。</small>
+            </div>
+            <div class="modal-footer" style="border-top:1px solid #2b3139;">
+                <button type="button" class="btn btn-primary" onclick="saveNotificationConfig()">💾 保存配置</button>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+
                 <span class="badge bg-dark border border-secondary">按需订阅 · 实时数据 <small id="latency-val"
                         class="ms-1 val-up">-- ms</small></span>
             </div>
@@ -186,6 +228,51 @@
     </div>
 
     <script>
+        function saveNotificationConfig() {
+            // 1. 先获取完整配置
+            fetch('/api/autopilot/status')
+                .then(r => r.json())
+                .then(data => {
+                    let config = data.config || {};
+                    
+                    // 2. 初始化 notification 块
+                    if (!config.notification) config.notification = {};
+                    
+                    // 3. 读取用户输入 (仅在非空时更新)
+                    const tgToken = document.getElementById('tg_token').value;
+                    const tgChatId = document.getElementById('tg_chat_id').value;
+                    const discordUrl = document.getElementById('discord_webhook').value;
+                    const interval = document.getElementById('alert_interval').value;
+                    
+                    if (tgToken) config.notification.tg_token = tgToken;
+                    if (tgChatId) config.notification.tg_chat_id = tgChatId;
+                    if (discordUrl) config.notification.discord_webhook = discordUrl;
+                    config.notification.interval_minutes = parseInt(interval);
+                    
+                    // 4. 写回完整配置
+                    return fetch('/api/autopilot/update_config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(config)
+                    });
+                })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.status === 'ok') {
+                        alert('✅ 通知配置已保存');
+                        // 清空敏感输入框
+                        document.getElementById('tg_token').value = '';
+                        document.getElementById('tg_chat_id').value = '';
+                        document.getElementById('discord_webhook').value = '';
+                        var myModal = bootstrap.Modal.getInstance(document.getElementById('settingsModal'));
+                        myModal.hide();
+                    } else {
+                        alert('❌ 保存失败: ' + res.msg);
+                    }
+                })
+                .catch(err => alert('错误: ' + err));
+        }
+
         // 【新增】双时区时钟
         function updateClock() {
             const now = new Date();
@@ -229,6 +316,15 @@
         const pendingTFs = {};
 
         function renderMarket(data) {
+            // [New] Extract System Stats from BTC data
+            if (data["BTC/USDT"]) {
+                const btc = data["BTC/USDT"];
+                if (btc.sys_cpu !== undefined) {
+                    document.getElementById('sys-stat-text').innerText = 
+                        `CPU: ${btc.sys_cpu}% | MEM: ${btc.sys_mem}% | Net: ${btc.sys_net}`;
+                }
+            }
+
             // 如果用户正在操作下拉框，暂停渲染
             const activeElement = document.activeElement;
             if (activeElement && activeElement.tagName === 'SELECT') return;
