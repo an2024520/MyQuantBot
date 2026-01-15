@@ -1,14 +1,13 @@
 # app/routes/api.py
 from flask import Blueprint, request, jsonify
 import ccxt
-from config import Config  # 【新增】
+from config import Config
 from app.services.monitor import SharedState, add_log
 from app.services.bot_manager import BotManager
 import json, os
+import copy # 用于深拷贝配置
 
 bp = Blueprint('api', __name__)
-
-# ... (market_status, set_timeframe, check_balance 保持不变) ...
 
 @bp.route('/market_status')
 def market_status():
@@ -32,20 +31,14 @@ def update_source():
         if new_source not in ['binance', 'okx', 'coinbase']:
             return jsonify({"status": "error", "msg": "Invalid source"})
             
-        # 1. 更新内存状态，通知 Monitor 线程切换
         SharedState.target_source = new_source
         
-        # 2. 持久化到 bot_state.json (复用 BotManager 的路径定义)
-        # 注意: 这里只更新 market_source 字段，不覆盖其他
         state_path = BotManager.EXTERNAL_STATE_PATH
         state = {}
-        
         if os.path.exists(state_path):
             with open(state_path, 'r', encoding='utf-8') as f:
                 state = json.load(f)
-                
         state['market_source'] = new_source
-        
         with open(state_path, 'w', encoding='utf-8') as f:
             json.dump(state, f, indent=4, ensure_ascii=False)
             
@@ -56,7 +49,6 @@ def update_source():
 
 @bp.route('/check_balance', methods=['POST'])
 def check_balance():
-    # ... (原有代码保持不变) ...
     try:
         data = request.json
         exchange_id = data.get('exchange_id', 'binance')
@@ -89,16 +81,11 @@ def get_kline():
     try:
         symbol = request.args.get('symbol', 'BTC/USDT')
         tf = request.args.get('tf', '1h')
-        
-        # 【新增】动态获取数据源，与 Monitor 保持一致
         source = getattr(Config, 'MARKET_SOURCE', 'binance')
         
-        # 实例化临时交易所
         if source == 'coinbase':
             exchange = ccxt.coinbase({'enableRateLimit': True})
-            # 智能适配: USDT -> USD
-            if 'USDT' in symbol:
-                symbol = symbol.replace('USDT', 'USD')
+            if 'USDT' in symbol: symbol = symbol.replace('USDT', 'USD')
         elif source == 'okx':
             exchange = ccxt.okx({'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
         else:
@@ -108,8 +95,6 @@ def get_kline():
         return jsonify({"status": "ok", "data": ohlcv})
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)})
-
-# ... (future_start, stop, pause, resume, update 保持不变) ...
 
 @bp.route('/future/start', methods=['POST'])
 def future_start():
@@ -143,6 +128,7 @@ def future_resume():
 @bp.route('/future/update', methods=['POST'])
 def future_update():
     try:
+        # 这里由 BotManager 内部处理保存逻辑 (Write-Through)
         keys = BotManager.update_config(request.json)
         if keys:
             add_log(f"[指令] 参数热更新: {', '.join(keys)}")
@@ -164,26 +150,30 @@ def future_status():
         "wallet_balance": 0, "current_price": 0, "smi": 0, "rsi": 0
     }
     
-    # 1. 先填充公共行情 (作为兜底)
-    # 假设机器人配置了 BTC/USDT，尝试从 SharedState 拿数据
     target_symbol = "BTC/USDT" 
     if bot: target_symbol = bot.config.get('symbol', "BTC/USDT")
     
     if target_symbol in SharedState.market_data:
         m_data = SharedState.market_data[target_symbol]
-        res['current_price'] = m_data['price'] # 默认用公共价格
+        res['current_price'] = m_data['price']
         res['smi'] = m_data['smi']
         res['rsi'] = m_data['rsi']
 
-    # 2. 如果机器人正在运行，强制覆盖为真实合约价格 (微观精准化)
     if bot and bot.running:
         res['running'] = bot.running
         res['paused'] = bot.paused
-        res.update(bot.status_data) # 这里包含了 entry_price, current_pos 等
+        res.update(bot.status_data)
         
-        # 【核心修正】: 用机器人内部的 last_price 覆盖公共 price
-        # 这样你在面板看到的一定是 OKX 合约的真实成交价
         if bot.status_data.get('last_price', 0) > 0:
             res['current_price'] = bot.status_data['last_price']
+            
+        # 【新增】返回脱敏配置供前端回填 (Read Params)
+        if bot.config:
+            safe_config = copy.deepcopy(bot.config)
+            # 零信任脱敏
+            for k in ['api_key', 'secret', 'password']:
+                if k in safe_config:
+                    safe_config.pop(k)
+            res['config'] = safe_config
             
     return jsonify(res)

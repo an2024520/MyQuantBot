@@ -6,8 +6,8 @@ from app.services.monitor import add_log
 
 class BotManager:
     _future_bot = None  # 单例实例
-    STATE_FILE = "bot_state.json"  # 【新增】状态存档文件
-    EXTERNAL_STATE_PATH = "/opt/myquant_config/bot_state.json"
+    STATE_FILE = "bot_state.json"  # 本地开发路径
+    EXTERNAL_STATE_PATH = "/opt/myquant_config/bot_state.json" # VPS 生产路径
 
     @classmethod
     def get_bot(cls):
@@ -23,7 +23,7 @@ class BotManager:
         cls._future_bot.start()
         add_log("[Manager] 机器人实例已创建并启动")
         
-        # 【新增】启动成功后，保存状态
+        # 启动成功后，保存状态
         cls.save_state()
 
     @classmethod
@@ -32,7 +32,7 @@ class BotManager:
             cls._future_bot.stop()
             add_log("[Manager] 停止指令已下达")
             
-            # 【新增】停止后，保存状态 (此时 running=False)
+            # 停止后，保存状态 (running=False)
             cls.save_state()
 
     @classmethod
@@ -41,7 +41,7 @@ class BotManager:
             cls._future_bot.pause()
             add_log("[Manager] 暂停指令已下达")
             
-            # 【新增】暂停后，保存状态 (paused=True)
+            # 暂停后，保存状态 (paused=True)
             cls.save_state()
         else:
             raise Exception("策略未运行，无法暂停")
@@ -52,7 +52,7 @@ class BotManager:
             cls._future_bot.resume()
             add_log("[Manager] 恢复指令已下达")
             
-            # 【新增】恢复后，保存状态 (paused=False)
+            # 恢复后，保存状态 (paused=False)
             cls.save_state()
         else:
             raise Exception("策略未运行，无法恢复")
@@ -79,7 +79,7 @@ class BotManager:
             cls._future_bot.config['active_order_limit'] = int(updates['active_order_limit'])
             updated_keys.append('挂单数')
             
-        # [新增] 扩展：支持格数、区间、金额等核心参数更新
+        # 扩展：支持格数、区间、金额等核心参数更新
         if 'grid_count' in updates and updates['grid_count']:
             cls._future_bot.config['grid_count'] = int(updates['grid_count'])
             updated_keys.append('格数')
@@ -98,7 +98,7 @@ class BotManager:
             cls._future_bot.order_qty = val # 同步更新缓存
             updated_keys.append('金额')
         
-        # [新增] 软重启逻辑：重算网格 + 重置挂单
+        # 软重启逻辑：重算网格 + 重置挂单
         if updated_keys:
             try:
                 # 1. 重新计算网格数组
@@ -115,13 +115,11 @@ class BotManager:
             except Exception as e:
                 add_log(f"[Soft Restart] 热更新失败: {e}")
 
-        # 【新增】参数更新后，保存最新配置到磁盘
+        # 【核心安全机制】参数更新后，强制保存最新配置到磁盘 (Write-Through)
         if updated_keys:
             cls.save_state()
             
         return updated_keys
-
-    # --- 【新增】持久化核心逻辑 ---
 
     @classmethod
     def save_state(cls):
@@ -145,7 +143,6 @@ class BotManager:
 
             with open(cls.EXTERNAL_STATE_PATH, 'w', encoding='utf-8') as f:
                 json.dump(state, f, indent=4, ensure_ascii=False)
-            # print(f">>> [System] 状态已保存: {state['running']}") 
         except Exception as e:
             add_log(f"[系统] 状态保存失败: {e}")
 
