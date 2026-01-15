@@ -128,11 +128,10 @@
 </head>
 
 <body>
-    <div class="container" style="max-width: 1200px;">
+    <div class="container" style="max-width: 1400px;">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h3 class="text-light m-0">🌍 全市场监控</h3>
             <div class="d-flex align-items-center">
-                <!-- 【新增】数据源切换 -->
                 <select id="market-source" class="form-select form-select-sm bg-dark text-light border-secondary me-3"
                     style="width: 120px;" onchange="changeSource(this.value)">
                     <option value="binance">Binance</option>
@@ -140,70 +139,120 @@
                     <option value="coinbase">Coinbase</option>
                 </select>
 
-                <!-- 【新增】双时区时钟 -->
                 <span class="badge bg-dark border border-secondary p-2 me-3"
                     style="font-family: monospace; font-size: 0.9rem;">
                     <span id="clock-bj">--:--</span> <span class="text-muted">|</span> <span id="clock-ny">--:--</span>
                 </span>
-
-<span class="badge bg-dark border border-secondary p-2 me-3 text-warning">
-    <span id="sys-stat-text">CPU: --% | MEM: --%</span>
-</span>
-
-<button class="btn btn-sm btn-outline-secondary me-3" data-bs-toggle="modal" data-bs-target="#settingsModal">
-    ⚙️ 设置
-</button>
-
-<div class="modal fade" id="settingsModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content" style="background:#1e2329; color:#fff; border:1px solid #3b3f46;">
-            <div class="modal-header" style="border-bottom:1px solid #2b3139;">
-                <h5 class="modal-title">🔔 通知设置 (Blind Config)</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="mb-3">
-                    <label class="form-label text-muted">Telegram Token</label>
-                    <input type="password" class="form-control bg-dark text-white border-secondary" id="tg_token" placeholder="输入 Token (不回显)">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label text-muted">Telegram Chat ID</label>
-                    <input type="password" class="form-control bg-dark text-white border-secondary" id="tg_chat_id" placeholder="输入 Chat ID (不回显)">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label text-muted">Discord Webhook</label>
-                    <input type="password" class="form-control bg-dark text-white border-secondary" id="discord_webhook" placeholder="输入 Webhook URL (不回显)">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label text-muted">报警冷却间隔 (分钟)</label>
-                    <input type="number" class="form-control bg-dark text-white border-secondary" id="alert_interval" value="15">
-                </div>
-                <small class="text-muted">* 敏感信息仅用于写入，刷新页面后不会显示。</small>
-            </div>
-            <div class="modal-footer" style="border-top:1px solid #2b3139;">
-                <button type="button" class="btn btn-primary" onclick="saveNotificationConfig()">💾 保存配置</button>
-            </div>
-        </div>
-    </div>
-</div>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-
+                
                 <span class="badge bg-dark border border-secondary">按需订阅 · 实时数据 <small id="latency-val"
                         class="ms-1 val-up">-- ms</small></span>
             </div>
         </div>
 
-        <div class="row" id="market-row">
-            <div class="col-12 text-center text-muted py-5">
-                <div class="spinner-border text-warning" role="status"></div>
-                <div class="mt-2">正在连接行情数据中心...</div>
+        <div class="row">
+            <div class="col-lg-8">
+                <div class="card monitor-card mb-4 h-100">
+                    <div class="card-header d-flex justify-content-between align-items-center"
+                        style="border-bottom: 1px solid #2b3139;">
+                        <span style="color: #a78bfa; font-weight: bold;">🖥️ SERVER STATUS (VPS)</span>
+                        <div>
+                            <span class="badge bg-dark border border-success text-success me-2"
+                                style="font-family: monospace;">
+                                HB: <span id="heartbeat-counter">--</span>s
+                            </span>
+                            <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal"
+                                data-bs-target="#settingsModal">
+                                ⚙️ 设置
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-4">
+                            <div class="col-md-4">
+                                <h6 class="text-muted small mb-3">HARDWARE</h6>
+
+                                <div class="d-flex justify-content-between small mb-1">
+                                    <span>CPU</span>
+                                    <span id="sys-cpu-val" class="text-warning">--%</span>
+                                </div>
+                                <div class="progress mb-3" style="height: 6px; background-color: #2b3139;">
+                                    <div id="sys-cpu-bar" class="progress-bar bg-warning" role="progressbar"
+                                        style="width: 0%"></div>
+                                </div>
+
+                                <div class="d-flex justify-content-between small mb-1">
+                                    <span>MEM</span>
+                                    <span id="sys-mem-val" class="text-info">--%</span>
+                                </div>
+                                <div class="progress mb-3" style="height: 6px; background-color: #2b3139;">
+                                    <div id="sys-mem-bar" class="progress-bar bg-info" role="progressbar"
+                                        style="width: 0%"></div>
+                                </div>
+
+                                <div class="d-flex justify-content-between small mb-1">
+                                    <span>DISK</span>
+                                    <span id="sys-disk-val" class="text-secondary">--%</span>
+                                </div>
+                                <div class="progress" style="height: 6px; background-color: #2b3139;">
+                                    <div id="sys-disk-bar" class="progress-bar bg-secondary" role="progressbar"
+                                        style="width: 0%"></div>
+                                </div>
+                            </div>
+
+                            <div class="col-md-4 border-start border-secondary ps-4">
+                                <h6 class="text-muted small mb-3">NETWORK SPEED</h6>
+                                <div class="d-flex align-items-center mb-3">
+                                    <span class="display-6 me-2 text-success">↑</span>
+                                    <div>
+                                        <div class="small text-muted">UPLOAD</div>
+                                        <div class="fs-5 text-white" style="font-family: monospace;"><span
+                                                id="sys-up">--</span> KB/s</div>
+                                    </div>
+                                </div>
+                                <div class="d-flex align-items-center">
+                                    <span class="display-6 me-2 text-primary">↓</span>
+                                    <div>
+                                        <div class="small text-muted">DOWNLOAD</div>
+                                        <div class="fs-5 text-white" style="font-family: monospace;"><span
+                                                id="sys-down">--</span> KB/s</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="col-md-4 border-start border-secondary ps-4">
+                                <h6 class="text-muted small mb-3">STATISTICS</h6>
+                                <div class="row">
+                                    <div class="col-6 mb-3">
+                                        <div class="small text-muted">UPTIME</div>
+                                        <div class="text-white" id="sys-uptime">--</div>
+                                    </div>
+                                    <div class="col-6 mb-3">
+                                        <div class="small text-muted">DAILY AVG</div>
+                                        <div class="text-white" id="sys-daily">-- G</div>
+                                    </div>
+                                    <div class="col-12">
+                                        <div class="small text-muted">TOTAL TRAFFIC</div>
+                                        <div class="text-white fs-5" id="sys-total">-- G</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-4">
+                <div class="row" id="market-row">
+                    <div class="col-12 text-center text-muted py-5">
+                        <div class="spinner-border text-warning" role="status"></div>
+                        <div class="mt-2">正在连接行情数据中心...</div>
+                    </div>
+                </div>
             </div>
         </div>
 
         <h4 class="mt-5 mb-3 text-light">🚀 策略控制中心</h4>
         <div class="row">
-
-
             <div class="col-md-4">
                 <button class="strategy-btn btn-future" onclick="window.open('/future_grid_panel', '_blank')">
                     <span>🔥 合约网格 (Futures)</span>
@@ -225,31 +274,62 @@
         </div>
     </div>
 
+    <div class="modal fade" id="settingsModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content" style="background:#1e2329; color:#fff; border:1px solid #3b3f46;">
+                <div class="modal-header" style="border-bottom:1px solid #2b3139;">
+                    <h5 class="modal-title">🔔 通知设置 (Blind Config)</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label text-muted">Telegram Token</label>
+                        <input type="password" class="form-control bg-dark text-white border-secondary" id="tg_token"
+                            placeholder="输入 Token (不回显)">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-muted">Telegram Chat ID</label>
+                        <input type="password" class="form-control bg-dark text-white border-secondary" id="tg_chat_id"
+                            placeholder="输入 Chat ID (不回显)">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-muted">Discord Webhook</label>
+                        <input type="password" class="form-control bg-dark text-white border-secondary"
+                            id="discord_webhook" placeholder="输入 Webhook URL (不回显)">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-muted">报警冷却间隔 (分钟)</label>
+                        <input type="number" class="form-control bg-dark text-white border-secondary" id="alert_interval"
+                            value="15">
+                    </div>
+                    <small class="text-muted">* 敏感信息仅用于写入，刷新页面后不会显示。</small>
+                </div>
+                <div class="modal-footer" style="border-top:1px solid #2b3139;">
+                    <button type="button" class="btn btn-primary" onclick="saveNotificationConfig()">💾 保存配置</button>
+                </div>
+            </div>
+        </div>
     </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 
     <script>
         function saveNotificationConfig() {
-            // 1. 先获取完整配置
             fetch('/api/autopilot/status')
                 .then(r => r.json())
                 .then(data => {
                     let config = data.config || {};
-                    
-                    // 2. 初始化 notification 块
                     if (!config.notification) config.notification = {};
-                    
-                    // 3. 读取用户输入 (仅在非空时更新)
                     const tgToken = document.getElementById('tg_token').value;
                     const tgChatId = document.getElementById('tg_chat_id').value;
                     const discordUrl = document.getElementById('discord_webhook').value;
                     const interval = document.getElementById('alert_interval').value;
-                    
+
                     if (tgToken) config.notification.tg_token = tgToken;
                     if (tgChatId) config.notification.tg_chat_id = tgChatId;
                     if (discordUrl) config.notification.discord_webhook = discordUrl;
                     config.notification.interval_minutes = parseInt(interval);
-                    
-                    // 4. 写回完整配置
+
                     return fetch('/api/autopilot/update_config', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -260,7 +340,6 @@
                 .then(res => {
                     if (res.status === 'ok') {
                         alert('✅ 通知配置已保存');
-                        // 清空敏感输入框
                         document.getElementById('tg_token').value = '';
                         document.getElementById('tg_chat_id').value = '';
                         document.getElementById('discord_webhook').value = '';
@@ -273,59 +352,53 @@
                 .catch(err => alert('错误: ' + err));
         }
 
-        // 【新增】双时区时钟
         function updateClock() {
             const now = new Date();
-
-            // 北京时间 (UTC+8)
             const bjTime = new Date(now.getTime() + (now.getTimezoneOffset() * 60000) + (3600000 * 8));
             document.getElementById('clock-bj').innerText = "BJ " + bjTime.toLocaleTimeString('en-GB', { hour12: false });
-
-            // 纽约时间 (America/New_York is typically UTC-4 or UTC-5, simplified here or use logic)
-            // 简单处理：北京时间 - 12小时 (大致) 或者使用 Intl
             const nyTime = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
             document.getElementById('clock-ny').innerText = "NY " + nyTime;
         }
         setInterval(updateClock, 1000);
         updateClock();
 
-        // 【新增】切换数据源
         function changeSource(source) {
             if (!confirm(`确认切换行情源到 ${source}? 可能会有短暂数据中断。`)) {
-                // 恢复原选项 (需要记录当前状态，这里简化处理，直接刷新)
                 location.reload();
                 return;
             }
-
             fetch('/api/system/update_source', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ source: source })
             }).then(r => r.json()).then(res => {
-                if (res.status === 'ok') {
-                    alert('切换成功，数据源已更新');
-                } else {
-                    alert('切换失败: ' + res.msg);
-                }
+                if (res.status === 'ok') { alert('切换成功，数据源已更新'); } else { alert('切换失败: ' + res.msg); }
             });
         }
 
         const ALL_TFS = ['5m', '15m', '1h', '2h', '4h', '8h', '12h', '1d'];
-
-        // 乐观UI记录本：防止下拉框在数据刷新轮回时跳变
         const pendingTFs = {};
 
         function renderMarket(data) {
-            // [New] Extract System Stats from BTC data
+            // [Update] Probe Stats (Cockpit Mode)
             if (data["BTC/USDT"]) {
                 const btc = data["BTC/USDT"];
                 if (btc.sys_cpu !== undefined) {
-                    document.getElementById('sys-stat-text').innerText = 
-                        `CPU: ${btc.sys_cpu}% | MEM: ${btc.sys_mem}% | Net: ${btc.sys_net}`;
+                    document.getElementById('sys-cpu-val').innerText = btc.sys_cpu + '%';
+                    document.getElementById('sys-cpu-bar').style.width = btc.sys_cpu + '%';
+                    document.getElementById('sys-mem-val').innerText = btc.sys_mem + '%';
+                    document.getElementById('sys-mem-bar').style.width = btc.sys_mem + '%';
+                    document.getElementById('sys-disk-val').innerText = btc.sys_disk + '%';
+                    document.getElementById('sys-disk-bar').style.width = btc.sys_disk + '%';
+                    document.getElementById('sys-up').innerText = btc.sys_up;
+                    document.getElementById('sys-down').innerText = btc.sys_down;
+                    document.getElementById('sys-total').innerText = btc.sys_total;
+                    document.getElementById('sys-daily').innerText = btc.sys_daily + ' G';
+                    document.getElementById('sys-uptime').innerText = btc.sys_uptime;
+                    resetHeartbeat();
                 }
             }
 
-            // 如果用户正在操作下拉框，暂停渲染
             const activeElement = document.activeElement;
             if (activeElement && activeElement.tagName === 'SELECT') return;
 
@@ -337,7 +410,6 @@
                 const sigVal = Number(d.sig).toFixed(5);
                 const rsiVal = Number(d.rsi).toFixed(2);
 
-                // 【新增】更新延迟显示 (取第一个有效数据的 latency)
                 if (d.latency !== undefined) {
                     const latEl = document.getElementById('latency-val');
                     if (latEl) {
@@ -345,8 +417,6 @@
                         latEl.className = "ms-1 " + (d.latency < 200 ? "val-up" : (d.latency > 500 ? "val-down" : "text-warning"));
                     }
                 }
-
-                // 【新增】更新下拉框状态 (如果后端源变了，前端自动对齐)
                 if (d.source) {
                     const sourceSel = document.getElementById('market-source');
                     if (sourceSel && sourceSel.value !== d.source && document.activeElement !== sourceSel) {
@@ -355,19 +425,14 @@
                 }
 
                 const rsiClass = d.rsi > 70 ? 'val-down' : (d.rsi < 30 ? 'val-up' : 'text-light');
-
-                // --- 智能周期判断 ---
                 let displayTF = d.tf;
                 if (pendingTFs[symbol]) {
-                    // 如果后端已经更新到我们想要的周期，清除 pending
                     if (pendingTFs[symbol] === d.tf) {
                         delete pendingTFs[symbol];
                     } else {
-                        // 后端还没跟上，强制显示前端选择的周期
                         displayTF = pendingTFs[symbol];
                     }
                 }
-                // ------------------
 
                 let optionsHtml = '';
                 ALL_TFS.forEach(tf => {
@@ -376,8 +441,9 @@
                 });
 
                 const slug = symbol.replace('/', '_');
+                // 【核心修改】col-md-4 -> col-12，让其在侧边栏占满宽度
                 html += `
-            <div class="col-md-4">
+            <div class="col-12">
                 <div class="monitor-card">
                     <div class="price-section" style="cursor:pointer;" onclick="window.location.href='/chart/${slug}'">
                         <div class="coin-title">
@@ -410,18 +476,12 @@
                 </div>
             </div>`;
             }
-
             container.innerHTML = html;
         }
 
         function changeTF(el, symbol, newTF) {
-            // 1. 自动失焦，允许界面恢复刷新
             el.blur();
-
-            // 2. 记在小本本上，强制锁定UI显示
             pendingTFs[symbol] = newTF;
-
-            // 3. 发送指令
             fetch('/api/set_timeframe', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -431,10 +491,25 @@
             });
         }
 
+        let countdown = 0;
+        let hbInterval = null;
+        function resetHeartbeat() {
+            countdown = 2;
+            updateHbDisplay();
+            if (hbInterval) clearInterval(hbInterval);
+            hbInterval = setInterval(() => {
+                countdown -= 1;
+                if (countdown < 0) countdown = 0;
+                updateHbDisplay();
+            }, 1000);
+        }
+        function updateHbDisplay() {
+            const el = document.getElementById('heartbeat-counter');
+            if (el) el.innerText = countdown;
+        }
+
         setInterval(() => {
-            fetch('/api/market_status').then(r => r.json()).then(data => {
-                renderMarket(data);
-            });
+            fetch('/api/market_status').then(r => r.json()).then(data => { renderMarket(data); });
         }, 2000);
     </script>
 </body>

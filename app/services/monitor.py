@@ -65,6 +65,11 @@ def market_monitor_thread():
     # 【新增】热切换检测
     current_source_name = Config.MARKET_SOURCE
 
+    # 初始化流量计算变量
+    last_sent_bytes = 0
+    last_recv_bytes = 0
+    last_net_time = time.time()
+
     while True:
         try:
             # 0. 检查源切换
@@ -127,18 +132,64 @@ def market_monitor_thread():
 
             # === A. 获取系统状态 (System Stats) ===
             try:
+                # 1. 基础指标
                 cpu = psutil.cpu_percent()
                 mem = psutil.virtual_memory().percent
-                net = psutil.net_io_counters()
-                sent_gb = round(net.bytes_sent / (1024**3), 2)
-                recv_gb = round(net.bytes_recv / (1024**3), 2)
+                disk = psutil.disk_usage('/').percent  # [New] Disk Usage
                 
-                # [Trick] 将系统状态挂载到 BTC 数据包中，利用现有 API 传给前端
+                # 2. 流量统计 (拆分上下行)
+                net = psutil.net_io_counters()
+                
+                # 实时数据
+                curr_sent = net.bytes_sent
+                curr_recv = net.bytes_recv
+                curr_time = time.time()
+                time_delta = curr_time - last_net_time
+                
+                # 计算速度 (KB/s)
+                if time_delta > 0.1:
+                    up_speed_kb = (curr_sent - last_sent_bytes) / time_delta / 1024
+                    down_speed_kb = (curr_recv - last_recv_bytes) / time_delta / 1024
+                    # 格式化显示
+                    sys_up = f"{int(up_speed_kb)}"
+                    sys_down = f"{int(down_speed_kb)}"
+                else:
+                    sys_up = "0"
+                    sys_down = "0"
+                
+                # 更新状态
+                last_sent_bytes = curr_sent
+                last_recv_bytes = curr_recv
+                last_net_time = curr_time
+                
+                # 总量与日均
+                sent_gb = round(curr_sent / (1024**3), 2)
+                recv_gb = round(curr_recv / (1024**3), 2)
+                total_gb = sent_gb + recv_gb
+                
+                uptime_sec = time.time() - psutil.boot_time()
+                uptime_days = uptime_sec / 86400
+                daily_avg = round(total_gb / uptime_days, 2) if uptime_days > 0.01 else 0
+
+                # 格式化运行时间 (例如: "5d 12h")
+                days = int(uptime_days)
+                hours = int((uptime_sec % 86400) / 3600)
+                uptime_str = f"{days}d {hours}h"
+
+                # [挂载数据]
                 if "BTC/USDT" in SharedState.market_data:
-                    SharedState.market_data["BTC/USDT"]["sys_cpu"] = cpu
-                    SharedState.market_data["BTC/USDT"]["sys_mem"] = mem
-                    SharedState.market_data["BTC/USDT"]["sys_net"] = f"↑{sent_gb}G ↓{recv_gb}G"
-            except: pass
+                    SharedState.market_data["BTC/USDT"].update({
+                        "sys_cpu": cpu,
+                        "sys_mem": mem,
+                        "sys_disk": disk,
+                        "sys_up": sys_up,       # New
+                        "sys_down": sys_down,   # New
+                        "sys_total": f"Tot:{total_gb:.1f}G",
+                        "sys_daily": f"{daily_avg}G",
+                        "sys_uptime": uptime_str  # [New] Add this line
+                    })
+            except Exception as e:
+                print(f"[SysMonitor Error] {e}")
 
             # === B. 哨兵报警逻辑 (Sentinel Alert) ===
             try:
