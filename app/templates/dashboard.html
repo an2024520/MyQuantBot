@@ -143,7 +143,7 @@
                     style="font-family: monospace; font-size: 0.9rem;">
                     <span id="clock-bj">--:--</span> <span class="text-muted">|</span> <span id="clock-ny">--:--</span>
                 </span>
-                
+
                 <span class="badge bg-dark border border-secondary">按需订阅 · 实时数据 <small id="latency-val"
                         class="ms-1 val-up">-- ms</small></span>
             </div>
@@ -220,19 +220,43 @@
                             </div>
 
                             <div class="col-md-4 border-start border-secondary ps-4">
-                                <h6 class="text-muted small mb-3">STATISTICS</h6>
-                                <div class="row">
-                                    <div class="col-6 mb-3">
-                                        <div class="small text-muted">UPTIME</div>
-                                        <div class="text-white" id="sys-uptime">--</div>
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <h6 class="text-muted small m-0">STATISTICS</h6>
+                                    <span class="badge bg-dark border border-secondary text-light small"
+                                        style="font-family: monospace;">
+                                        UPTIME: <span id="sys-uptime">--</span>
+                                    </span>
+                                </div>
+
+                                <div class="d-flex align-items-center mb-3">
+                                    <span class="fs-4 me-3 text-success">↑</span>
+                                    <div class="w-100">
+                                        <div class="d-flex justify-content-between">
+                                            <span class="small text-muted">TOTAL</span>
+                                            <span class="small text-white" style="font-family: monospace;"
+                                                id="sys-total-up">-- G</span>
+                                        </div>
+                                        <div class="d-flex justify-content-between">
+                                            <span class="small text-muted">AVG</span>
+                                            <span class="small text-white" style="font-family: monospace;"
+                                                id="sys-daily-up">-- G/d</span>
+                                        </div>
                                     </div>
-                                    <div class="col-6 mb-3">
-                                        <div class="small text-muted">DAILY AVG</div>
-                                        <div class="text-white" id="sys-daily">-- G</div>
-                                    </div>
-                                    <div class="col-12">
-                                        <div class="small text-muted">TOTAL TRAFFIC</div>
-                                        <div class="text-white fs-5" id="sys-total">-- G</div>
+                                </div>
+
+                                <div class="d-flex align-items-center">
+                                    <span class="fs-4 me-3 text-primary">↓</span>
+                                    <div class="w-100">
+                                        <div class="d-flex justify-content-between">
+                                            <span class="small text-muted">TOTAL</span>
+                                            <span class="small text-white" style="font-family: monospace;"
+                                                id="sys-total-down">-- G</span>
+                                        </div>
+                                        <div class="d-flex justify-content-between">
+                                            <span class="small text-muted">AVG</span>
+                                            <span class="small text-white" style="font-family: monospace;"
+                                                id="sys-daily-down">-- G/d</span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -299,8 +323,8 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label text-muted">报警冷却间隔 (分钟)</label>
-                        <input type="number" class="form-control bg-dark text-white border-secondary" id="alert_interval"
-                            value="15">
+                        <input type="number" class="form-control bg-dark text-white border-secondary"
+                            id="alert_interval" value="15">
                     </div>
                     <small class="text-muted">* 敏感信息仅用于写入，刷新页面后不会显示。</small>
                 </div>
@@ -392,9 +416,14 @@
                     document.getElementById('sys-disk-bar').style.width = btc.sys_disk + '%';
                     document.getElementById('sys-up').innerText = btc.sys_up;
                     document.getElementById('sys-down').innerText = btc.sys_down;
-                    document.getElementById('sys-total').innerText = btc.sys_total;
-                    document.getElementById('sys-daily').innerText = btc.sys_daily + ' G';
+                    // Stats Mapping
                     document.getElementById('sys-uptime').innerText = btc.sys_uptime;
+
+                    document.getElementById('sys-total-up').innerText = btc.sys_total_up;
+                    document.getElementById('sys-daily-up').innerText = btc.sys_daily_up;
+
+                    document.getElementById('sys-total-down').innerText = btc.sys_total_down;
+                    document.getElementById('sys-daily-down').innerText = btc.sys_daily_down;
                     resetHeartbeat();
                 }
             }
