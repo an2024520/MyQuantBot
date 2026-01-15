@@ -162,6 +162,7 @@ def future_status():
     if bot and bot.running:
         res['running'] = bot.running
         res['paused'] = bot.paused
+        res['start_time'] = getattr(bot, 'start_time', 0)
         res.update(bot.status_data)
         
         if bot.status_data.get('last_price', 0) > 0:

@@ -184,6 +184,7 @@ class FutureGridBot(FutureGridInitMixin, FutureGridCalcMixin, FutureGridRiskMixi
             self.log("[警告] 策略已在运行中")
             return
 
+        self.start_time = time.time()
         self.running = True
         self.paused = False
         self.force_sync = True
@@ -214,6 +215,7 @@ class FutureGridBot(FutureGridInitMixin, FutureGridCalcMixin, FutureGridRiskMixi
     def stop(self):
         self.log("[指令] 正在停止... 撤单并平仓")
         self.running = False 
+        self.start_time = None 
         self.paused = False
 
         if self.worker_thread and self.worker_thread.is_alive():
