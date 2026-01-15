@@ -1,0 +1,28 @@
+{
+    "sentinel": {
+        "market_source": "coinbase",
+        "symbol": "BTC/USD",
+        "timeframe": "4h",
+        "smi_period": 14,
+        "triggers": {
+            "long_open": -0.46,
+            "long_close": 0.4,
+            "short_open": 0.46,
+            "short_close": -0.4
+        }
+    },
+    "template_long": {
+        "upper_buffer_pct": 0.07,
+        "lower_buffer_pct": 0.03,
+        "leverage": 5,
+        "amount": 0.001,
+        "grid_num": 40
+    },
+    "template_short": {
+        "upper_buffer_pct": 0.03,
+        "lower_buffer_pct": 0.07,
+        "leverage": 5,
+        "amount": 0.001,
+        "grid_num": 40
+    }
+}

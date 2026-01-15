@@ -15,3 +15,7 @@ def future_grid_panel():
 def chart_page(symbol_slug):
     # symbol_slug 可能是 "BTC_USDT"，前端自己会解析
     return render_template('chart.html')
+
+@bp.route('/autopilot')
+def autopilot():
+    return render_template('autopilot.html')

@@ -178,3 +178,47 @@ def future_status():
             res['config'] = safe_config
             
     return jsonify(res)
+
+
+# ============ AutoPilot API ============
+@bp.route('/autopilot/status')
+def autopilot_status():
+    """获取 AutoPilot 配置和状态"""
+    try:
+        from app.services.autopilot_service import AutoPilotService
+        return jsonify({
+            'status': 'ok',
+            'config': AutoPilotService.load_config(),
+            'state': AutoPilotService.load_state(),
+            'runtime': AutoPilotService.get_runtime_data()
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'msg': str(e)})
+
+
+@bp.route('/autopilot/update_config', methods=['POST'])
+def autopilot_update_config():
+    """更新 AutoPilot 配置"""
+    try:
+        from app.services.autopilot_service import AutoPilotService
+        data = request.json
+        AutoPilotService.save_config(data)
+        add_log("[AutoPilot] 配置已更新")
+        return jsonify({'status': 'ok', 'msg': '配置已更新'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'msg': str(e)})
+
+
+@bp.route('/autopilot/toggle', methods=['POST'])
+def autopilot_toggle():
+    """切换 AutoPilot 开关"""
+    try:
+        from app.services.autopilot_service import AutoPilotService
+        data = request.json
+        enabled = data.get('enabled', False)
+        new_state = AutoPilotService.set_enabled(enabled)
+        action = "已启用" if enabled else "已禁用"
+        add_log(f"[AutoPilot] {action}")
+        return jsonify({'status': 'ok', 'state': new_state})
+    except Exception as e:
+        return jsonify({'status': 'error', 'msg': str(e)})

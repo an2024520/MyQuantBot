@@ -21,4 +21,8 @@ def create_app(config_class=Config):
     from app.services.bot_manager import BotManager
     BotManager.load_state()
 
+    # 【新增】启动 AutoPilot 后台监控服务
+    from app.services.autopilot_service import AutoPilotService
+    AutoPilotService.start_service()
+
     return app

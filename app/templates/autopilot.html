@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>SignalGuard AutoPilot 控制台</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: #0b0e11;
+            color: #d4d4d4;
+            padding: 20px;
+            font-family: 'Segoe UI', monospace;
+            font-size: 13px;
+        }
+
+        .card {
+            background: #1e2329;
+            border: 1px solid #2b3139;
+            margin-bottom: 15px;
+            border-radius: 8px;
+        }
+
+        .card-header {
+            border-bottom: 1px solid #2b3139;
+            color: #a78bfa;
+            font-weight: bold;
+            padding: 12px 15px;
+        }
+
+        .form-control,
+        .form-select {
+            background: #161a1e;
+            border: 1px solid #3b3f46;
+            color: #fff;
+            font-size: 12px;
+        }
+
+        .form-control:focus,
+        .form-select:focus {
+            background: #161a1e;
+            color: #fff;
+            border-color: #6366f1;
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
+        }
+
+        .form-label {
+            color: #848e9c;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+
+        /* 主开关样式 */
+        .master-switch {
+            background: linear-gradient(135deg, #1e2329 0%, #161a1e 100%);
+            border: 2px solid #3b3f46;
+            border-radius: 12px;
+            padding: 20px 30px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .master-switch.enabled {
+            border-color: #22c55e;
+            box-shadow: 0 0 20px rgba(34, 197, 94, 0.2);
+        }
+
+        .switch-label {
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+
+        .form-switch .form-check-input {
+            width: 60px;
+            height: 30px;
+            cursor: pointer;
+        }
+
+        .form-switch .form-check-input:checked {
+            background-color: #22c55e;
+            border-color: #22c55e;
+        }
+
+        /* 状态徽章 */
+        .status-badge {
+            font-size: 0.9rem;
+            padding: 8px 16px;
+            border-radius: 20px;
+        }
+
+        .status-running {
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            color: #fff;
+        }
+
+        .status-stopped {
+            background: #3b3f46;
+            color: #848e9c;
+        }
+
+        /* SMI 实时显示 */
+        .smi-display {
+            background: #161a1e;
+            border: 1px solid #3b3f46;
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+            margin-top: 15px;
+        }
+
+        .smi-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #6366f1;
+        }
+
+        .smi-label {
+            color: #848e9c;
+            font-size: 0.8rem;
+        }
+
+        /* 触发器显示 */
+        .trigger-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px dashed #2b3139;
+        }
+
+        .trigger-row:last-child {
+            border-bottom: none;
+        }
+
+        .trigger-label {
+            color: #848e9c;
+        }
+
+        .trigger-val-long {
+            color: #22c55e;
+            font-weight: bold;
+        }
+
+        .trigger-val-short {
+            color: #ef4444;
+            font-weight: bold;
+        }
+
+        /* 保存按钮 */
+        .btn-save {
+            background: linear-gradient(135deg, #6366f1 0%, #4338ca 100%);
+            border: none;
+            color: #fff;
+            font-weight: bold;
+            padding: 12px 40px;
+            border-radius: 8px;
+            font-size: 1rem;
+        }
+
+        .btn-save:hover {
+            background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%);
+            color: #fff;
+        }
+
+        /* 模式状态 */
+        .mode-indicator {
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            margin-top: 15px;
+        }
+
+        .mode-none {
+            background: #1e2329;
+            border: 1px solid #3b3f46;
+        }
+
+        .mode-long {
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid #22c55e;
+        }
+
+        .mode-short {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid #ef4444;
+        }
+
+        .header-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #2b3139;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container" style="max-width: 1400px;">
+        <!-- 头部 -->
+        <div class="header-bar">
+            <div>
+                <h4 class="m-0" style="color: #a78bfa;">🤖 SignalGuard 自动驾驶控制台</h4>
+                <small class="text-muted">SMI 信号驱动的智能网格策略</small>
+            </div>
+            <div>
+                <span id="status-badge" class="status-badge status-stopped">⏹ 未启用</span>
+            </div>
+        </div>
+
+        <!-- 主开关 -->
+        <div class="master-switch" id="master-switch">
+            <div>
+                <div class="switch-label" style="color: #fff;">AutoPilot 主开关</div>
+                <small class="text-muted">启用后将自动监控 SMI 信号并执行开平仓操作</small>
+            </div>
+            <div class="d-flex align-items-center">
+                <span id="mode-display" class="me-4 text-muted">当前模式: <span id="current-mode"
+                        class="text-warning">---</span></span>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="main-switch" onchange="toggleSwitch()">
+                </div>
+            </div>
+        </div>
+
+        <!-- 作战指令 (Execution Target) -->
+        <div class="card mb-4" style="border-color: #f59e0b;">
+            <div class="card-header" style="color: #f59e0b;">🎯 作战指令 (Execution Target)</div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label">目标交易所</label>
+                        <select class="form-select" id="execution-exchange">
+                            <option value="binance">Binance</option>
+                            <option value="okx">OKX</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">目标交易对</label>
+                        <input class="form-control" id="execution-symbol" value="BTC/USDT" placeholder="e.g. ETH/USDT">
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end">
+                        <small class="text-muted">📌 指挥官，请指定检测到信号后要去攻打的目标。</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 三列配置 -->
+        <div class="row">
+            <!-- 列1: 信号哨兵 -->
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">📡 信号哨兵 (Sentinel)</div>
+                    <div class="card-body">
+                        <!-- 动态监控源显示 -->
+                        <div class="alert alert-dark d-flex align-items-center mb-3" style="border: 1px solid #3b3f46;">
+                            <div class="me-3" style="font-size: 1.5rem;">👀</div>
+                            <div>
+                                <div class="text-muted" style="font-size: 0.8rem;">当前主页监控 (Source)</div>
+                                <div id="monitor-source" style="font-weight: bold; color: #a78bfa;">等待连接...</div>
+                            </div>
+                        </div>
+                        <small class="text-muted d-block mb-3">📌 AutoPilot 自动跟随主页仪表盘的第一个交易对</small>
+
+                        <hr style="border-color: #3b3f46;">
+                        <h6 class="text-muted mb-3">触发阈值</h6>
+
+                        <div class="row g-2 mb-2">
+                            <div class="col-6">
+                                <label class="form-label">开多 (Long Open)</label>
+                                <input class="form-control" id="long_open" type="number" step="0.01" value="-0.46">
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">平多 (Long Close)</label>
+                                <input class="form-control" id="long_close" type="number" step="0.01" value="0.40">
+                            </div>
+                        </div>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label class="form-label">开空 (Short Open)</label>
+                                <input class="form-control" id="short_open" type="number" step="0.01" value="0.46">
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">平空 (Short Close)</label>
+                                <input class="form-control" id="short_close" type="number" step="0.01" value="-0.40">
+                            </div>
+                        </div>
+
+                        <!-- SMI 实时显示 -->
+                        <div class="smi-display">
+                            <div class="smi-label">当前 SMI 值</div>
+                            <div class="smi-value" id="smi-value">---</div>
+                            <small class="text-muted" id="smi-time">等待数据...</small>
+                        </div>
+
+                        <!-- 当前模式 -->
+                        <div class="mode-indicator mode-none" id="mode-indicator">
+                            <div class="text-muted">当前状态</div>
+                            <div id="mode-text" style="font-size: 1.1rem; font-weight: bold;">待机中</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 列2: 做多模板 -->
+            <div class="col-md-4">
+                <div class="card" style="border-color: #22c55e;">
+                    <div class="card-header" style="color: #22c55e;">📈 做多模板 (Long Template)</div>
+                    <div class="card-body">
+                        <div class="row g-2 mb-3">
+                            <div class="col-6">
+                                <label class="form-label">上缓冲 (%)</label>
+                                <input class="form-control" id="long_upper_buffer" type="number" step="0.01"
+                                    value="0.07">
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">下缓冲 (%)</label>
+                                <input class="form-control" id="long_lower_buffer" type="number" step="0.01"
+                                    value="0.03">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">杠杆倍数</label>
+                            <input class="form-control" id="long_leverage" type="number" value="5">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">每格数量</label>
+                            <input class="form-control" id="long_amount" type="number" step="0.0001" value="0.001">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">网格数量</label>
+                            <input class="form-control" id="long_grid_num" type="number" value="40">
+                        </div>
+
+                        <div class="alert alert-success py-2 px-3 mb-0"
+                            style="background: rgba(34, 197, 94, 0.1); border-color: #22c55e; color: #22c55e;">
+                            <small>📌 当 SMI < <span id="preview-long-open">-0.46</span> 时触发开仓</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 列3: 做空模板 -->
+            <div class="col-md-4">
+                <div class="card" style="border-color: #ef4444;">
+                    <div class="card-header" style="color: #ef4444;">📉 做空模板 (Short Template)</div>
+                    <div class="card-body">
+                        <div class="row g-2 mb-3">
+                            <div class="col-6">
+                                <label class="form-label">上缓冲 (%)</label>
+                                <input class="form-control" id="short_upper_buffer" type="number" step="0.01"
+                                    value="0.03">
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">下缓冲 (%)</label>
+                                <input class="form-control" id="short_lower_buffer" type="number" step="0.01"
+                                    value="0.07">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">杠杆倍数</label>
+                            <input class="form-control" id="short_leverage" type="number" value="5">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">每格数量</label>
+                            <input class="form-control" id="short_amount" type="number" step="0.0001" value="0.001">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">网格数量</label>
+                            <input class="form-control" id="short_grid_num" type="number" value="40">
+                        </div>
+
+                        <div class="alert alert-danger py-2 px-3 mb-0"
+                            style="background: rgba(239, 68, 68, 0.1); border-color: #ef4444; color: #ef4444;">
+                            <small>📌 当 SMI > <span id="preview-short-open">0.46</span> 时触发开仓</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 操作栏 -->
+        <div class="text-center mt-4">
+            <button class="btn btn-save" onclick="saveConfig()">💾 保存配置</button>
+            <small class="d-block text-muted mt-2">保存后配置将立即生效 (无需重启服务)</small>
+        </div>
+    </div>
+
+    <script>
+        let configLoaded = false;
+
+        // ============ 页面加载 ============
+        window.onload = function () {
+            // 首次加载配置 (填充表单)
+            loadConfig();
+            // 定时刷新仪表盘状态 (每3秒，不触碰输入框)
+            setInterval(updateDashboard, 3000);
+        };
+
+        // ============ 加载配置 (仅首次或保存后调用) ============
+        function loadConfig() {
+            fetch('/api/autopilot/status')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status !== 'ok') {
+                        console.error('获取配置失败:', data.msg);
+                        return;
+                    }
+
+                    const config = data.config;
+                    if (config) {
+                        fillForm(config);
+                        configLoaded = true;
+                    }
+
+                    // 同时更新一次仪表盘
+                    updateDashboardFromData(data);
+                })
+                .catch(err => console.error('配置加载失败:', err));
+        }
+
+        // ============ 更新仪表盘 (定时调用，不修改输入框) ============
+        function updateDashboard() {
+            fetch('/api/autopilot/status')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status !== 'ok') {
+                        console.error('获取状态失败:', data.msg);
+                        return;
+                    }
+                    updateDashboardFromData(data);
+                })
+                .catch(err => console.error('状态获取失败:', err));
+        }
+
+        // ============ 从数据更新仪表盘元素 (不触碰 input/select) ============
+        function updateDashboardFromData(data) {
+            const state = data.state || {};
+            const runtime = data.runtime || {};
+
+            // 1. 更新主开关状态
+            const mainSwitch = document.getElementById('main-switch');
+            const masterDiv = document.getElementById('master-switch');
+            const statusBadge = document.getElementById('status-badge');
+
+            mainSwitch.checked = state.enabled;
+
+            if (state.enabled) {
+                masterDiv.classList.add('enabled');
+                statusBadge.className = 'status-badge status-running';
+                statusBadge.innerText = '🟢 监控中';
+            } else {
+                masterDiv.classList.remove('enabled');
+                statusBadge.className = 'status-badge status-stopped';
+                statusBadge.innerText = '⏹ 未启用';
+            }
+
+            // 2. 更新当前模式显示
+            const modeIndicator = document.getElementById('mode-indicator');
+            const modeText = document.getElementById('mode-text');
+            const currentMode = document.getElementById('current-mode');
+
+            modeIndicator.className = 'mode-indicator';
+
+            switch (state.current_mode) {
+                case 'long':
+                    modeIndicator.classList.add('mode-long');
+                    modeText.innerText = '📈 做多运行中';
+                    modeText.style.color = '#22c55e';
+                    currentMode.innerText = 'LONG';
+                    currentMode.style.color = '#22c55e';
+                    break;
+                case 'short':
+                    modeIndicator.classList.add('mode-short');
+                    modeText.innerText = '📉 做空运行中';
+                    modeText.style.color = '#ef4444';
+                    currentMode.innerText = 'SHORT';
+                    currentMode.style.color = '#ef4444';
+                    break;
+                default:
+                    modeIndicator.classList.add('mode-none');
+                    modeText.innerText = '待机中';
+                    modeText.style.color = '#848e9c';
+                    currentMode.innerText = 'NONE';
+                    currentMode.style.color = '#f0b90b';
+            }
+
+            // 3. 更新实时 SMI 和价格 (从 runtime 数据)
+            const smiValue = document.getElementById('smi-value');
+            const smiTime = document.getElementById('smi-time');
+
+            if (runtime.smi !== null && runtime.smi !== undefined) {
+                smiValue.innerText = runtime.smi.toFixed(4);
+
+                // 根据触发阈值变色
+                const longOpen = parseFloat(document.getElementById('long_open').value) || -0.46;
+                const shortOpen = parseFloat(document.getElementById('short_open').value) || 0.46;
+
+                if (runtime.smi < longOpen) {
+                    smiValue.style.color = '#22c55e'; // 开多区
+                } else if (runtime.smi > shortOpen) {
+                    smiValue.style.color = '#ef4444'; // 开空区
+                } else {
+                    smiValue.style.color = '#6366f1'; // 中性区
+                }
+            } else {
+                smiValue.innerText = '---';
+                smiValue.style.color = '#6366f1';
+            }
+
+            if (runtime.updated_at && runtime.updated_at > 0) {
+                const ago = Math.floor(Date.now() / 1000 - runtime.updated_at);
+                smiTime.innerText = ago < 60 ? `${ago}秒前更新` : `${Math.floor(ago / 60)}分钟前更新`;
+            } else {
+                smiTime.innerText = '等待数据...';
+            }
+
+            // 4. 更新监控源显示
+            const monitorDisplay = document.getElementById('monitor-source');
+            if (monitorDisplay) {
+                if (runtime.monitor_symbol) {
+                    monitorDisplay.innerText = `${runtime.monitor_symbol} (${runtime.monitor_tf})`;
+                } else {
+                    monitorDisplay.innerText = "等待主页数据...";
+                }
+            }
+
+
+        }
+
+        // ============ 填充表单 (仅调用一次) ============
+        function fillForm(config) {
+            // Execution
+            if (config.execution) {
+                document.getElementById('execution-exchange').value = config.execution.exchange || 'binance';
+                document.getElementById('execution-symbol').value = config.execution.symbol || 'BTC/USDT';
+            }
+
+            // Sentinel (只填充 Trigger，其他的已移除)
+            if (config.sentinel && config.sentinel.triggers) {
+                document.getElementById('long_open').value = config.sentinel.triggers.long_open || -0.46;
+                document.getElementById('long_close').value = config.sentinel.triggers.long_close || 0.40;
+                document.getElementById('short_open').value = config.sentinel.triggers.short_open || 0.46;
+                document.getElementById('short_close').value = config.sentinel.triggers.short_close || -0.40;
+
+                // 更新预览
+                const prevLong = document.getElementById('preview-long-open');
+                const prevShort = document.getElementById('preview-short-open');
+                if (prevLong) prevLong.innerText = config.sentinel.triggers.long_open;
+                if (prevShort) prevShort.innerText = config.sentinel.triggers.short_open;
+            }
+
+            // Long Template
+            if (config.template_long) {
+                document.getElementById('long_upper_buffer').value = config.template_long.upper_buffer_pct || 0.07;
+                document.getElementById('long_lower_buffer').value = config.template_long.lower_buffer_pct || 0.03;
+                document.getElementById('long_leverage').value = config.template_long.leverage || 5;
+                document.getElementById('long_amount').value = config.template_long.amount || 0.001;
+                document.getElementById('long_grid_num').value = config.template_long.grid_num || 40;
+            }
+
+            // Short Template
+            if (config.template_short) {
+                document.getElementById('short_upper_buffer').value = config.template_short.upper_buffer_pct || 0.03;
+                document.getElementById('short_lower_buffer').value = config.template_short.lower_buffer_pct || 0.07;
+                document.getElementById('short_leverage').value = config.template_short.leverage || 5;
+                document.getElementById('short_amount').value = config.template_short.amount || 0.001;
+                document.getElementById('short_grid_num').value = config.template_short.grid_num || 40;
+            }
+        }
+
+        // ============ 保存配置 ============
+        function saveConfig() {
+            const config = {
+                execution: {
+                    exchange: document.getElementById('execution-exchange').value,
+                    symbol: document.getElementById('execution-symbol').value
+                },
+                sentinel: {
+                    symbol: "AUTO",
+                    timeframe: "AUTO",
+                    smi_period: 14,
+                    triggers: {
+                        long_open: parseFloat(document.getElementById('long_open').value),
+                        long_close: parseFloat(document.getElementById('long_close').value),
+                        short_open: parseFloat(document.getElementById('short_open').value),
+                        short_close: parseFloat(document.getElementById('short_close').value)
+                    }
+                },
+                template_long: {
+                    upper_buffer_pct: parseFloat(document.getElementById('long_upper_buffer').value),
+                    lower_buffer_pct: parseFloat(document.getElementById('long_lower_buffer').value),
+                    leverage: parseInt(document.getElementById('long_leverage').value),
+                    amount: parseFloat(document.getElementById('long_amount').value),
+                    grid_num: parseInt(document.getElementById('long_grid_num').value)
+                },
+                template_short: {
+                    upper_buffer_pct: parseFloat(document.getElementById('short_upper_buffer').value),
+                    lower_buffer_pct: parseFloat(document.getElementById('short_lower_buffer').value),
+                    leverage: parseInt(document.getElementById('short_leverage').value),
+                    amount: parseFloat(document.getElementById('short_amount').value),
+                    grid_num: parseInt(document.getElementById('short_grid_num').value)
+                }
+            };
+
+            fetch('/api/autopilot/update_config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.status === 'ok') {
+                        alert('✅ 配置已保存！');
+                        // 重新加载配置以确保同步
+                        loadConfig();
+                    } else {
+                        alert('❌ 保存失败: ' + res.msg);
+                    }
+                })
+                .catch(err => alert('请求错误: ' + err));
+        }
+
+        // ============ 切换开关 ============
+        function toggleSwitch() {
+            const enabled = document.getElementById('main-switch').checked;
+
+            fetch('/api/autopilot/toggle', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: enabled })
+            })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.status === 'ok') {
+                        console.log('开关切换成功:', res.state);
+                    } else {
+                        alert('切换失败: ' + res.msg);
+                        // 恢复开关状态
+                        document.getElementById('main-switch').checked = !enabled;
+                    }
+                })
+                .catch(err => {
+                    alert('请求错误: ' + err);
+                    document.getElementById('main-switch').checked = !enabled;
+                });
+        }
+    </script>
+</body>
+
+</html>
