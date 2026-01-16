@@ -143,9 +143,12 @@ class AutoPilotService:
         # ============ Scenario A: Bot 已停止 ============
         if not bot_running:
             # Circuit Breaker: 检测外部停止
+            # 逻辑说明: 如果 AutoPilot 认为应该在运行 (current_mode != 'none')，
+            # 但检测到 Bot 实际已停止 (bot_running == False)，判定为"非预期停止" (如止损触发或手动关闭)。
+            # 此时必须触发熔断，禁用 AutoPilot，将控制权交还给用户。
             if current_mode != 'none':
-                logger.warning("[AutoPilot] Circuit Breaker: Bot 被外部停止，AutoPilot 已禁用")
-                print("[AutoPilot] Circuit Breaker: Bot 被外部停止，AutoPilot 已禁用")
+                logger.warning(f"[AutoPilot] 熔断触发: 预期处于 {current_mode} 模式但检测到 Bot 已停止 (可能触发止损或被手动关闭)")
+                print(f"[AutoPilot] 熔断触发: 预期处于 {current_mode} 模式但检测到 Bot 已停止 (可能触发止损或被手动关闭)")
                 self.state['enabled'] = False
                 self.state['current_mode'] = 'none'
                 self.save_state(self.state)
