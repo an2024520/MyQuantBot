@@ -329,6 +329,8 @@
                     <small class="text-muted">* 敏感信息仅用于写入，刷新页面后不会显示。</small>
                 </div>
                 <div class="modal-footer" style="border-top:1px solid #2b3139;">
+                    <button type="button" class="btn btn-outline-info me-auto" onclick="triggerTestNotify()">🧪
+                        测试发送</button>
                     <button type="button" class="btn btn-primary" onclick="saveNotificationConfig()">💾 保存配置</button>
                 </div>
             </div>
@@ -338,6 +340,51 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 
     <script>
+        function triggerTestNotify() {
+            // 1. 获取当前输入框的值 (用户可能刚填完还没保存)
+            const tgToken = document.getElementById('tg_token').value;
+            const tgChatId = document.getElementById('tg_chat_id').value;
+            const discordUrl = document.getElementById('discord_webhook').value;
+
+            if (!tgToken && !discordUrl) {
+                alert("请先填写 Telegram Token 或 Discord Webhook 链接");
+                return;
+            }
+
+            if (!confirm("确定要发送测试消息吗？\n(这将保存当前配置并触发一次即时推送)")) return;
+
+            // 2. 复用保存逻辑，但带上 test_trigger 标记
+            fetch('/api/autopilot/status')
+                .then(r => r.json())
+                .then(data => {
+                    let config = data.config || {};
+                    if (!config.notification) config.notification = {};
+
+                    // 核心逻辑: 写入一次性触发标记
+                    config.notification.test_trigger = true;
+
+                    // 更新配置值
+                    if (tgToken) config.notification.tg_token = tgToken;
+                    if (tgChatId) config.notification.tg_chat_id = tgChatId;
+                    if (discordUrl) config.notification.discord_webhook = discordUrl;
+
+                    return fetch('/api/autopilot/update_config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(config)
+                    });
+                })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.status === 'ok') {
+                        alert('🚀 测试指令已发出！\n后端将在下一次心跳 (约2秒内) 处理发送请求。');
+                    } else {
+                        alert('❌ 指令发送失败: ' + res.msg);
+                    }
+                })
+                .catch(err => alert('错误: ' + err));
+        }
+
         function saveNotificationConfig() {
             fetch('/api/autopilot/status')
                 .then(r => r.json())

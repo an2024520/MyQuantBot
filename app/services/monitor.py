@@ -209,6 +209,23 @@ def market_monitor_thread():
                 
                 with open(config_path, 'r', encoding='utf-8') as f:
                     ap_config = json.load(f)
+
+                # [New] 0. 检查手动测试触发 (优先处理)
+                notify_cfg = ap_config.get('notification', {})
+                if notify_cfg.get('test_trigger'):
+                    print(">>> [Sentinel] 检测到手动测试指令")
+                    # 发送测试消息
+                    test_msg = "🧪 [MyQuantBot] 这是一个手动测试消息。\n\n✅ 你的报警配置已生效！\n当前时间: " + time.strftime("%Y-%m-%d %H:%M:%S")
+                    send_message(ap_config, test_msg)
+                    
+                    # 擦除标记 (防止重复发送)
+                    try:
+                        ap_config['notification']['test_trigger'] = False
+                        with open(config_path, 'w', encoding='utf-8') as f:
+                            json.dump(ap_config, f, indent=4, ensure_ascii=False)
+                        print(">>> [Sentinel] 测试标记已重置")
+                    except Exception as e:
+                        print(f"[Sentinel Error] 重置标记失败: {e}")
                 
                 # 2. 检查 SMI 触发
                 btc_data = SharedState.market_data.get("BTC/USDT", {})
