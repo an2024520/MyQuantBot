@@ -278,7 +278,7 @@ class AutoPilotService:
             'leverage': template.get('leverage', 5),
             'amount': template.get('amount', 0.001),
             'grid_num': template.get('grid_num', 40),
-            'mode': mode,
+            'strategy_type': mode,
         }
         
         return bot_config
