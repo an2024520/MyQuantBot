@@ -46,6 +46,7 @@ class AutoPilotService:
         # 加载配置和状态
         self.config = self.load_config()
         self.state = self.load_state()
+        self.startup_time = time.time()
         
         # 后台线程
         self.worker = None
@@ -173,13 +174,17 @@ class AutoPilotService:
         # 逻辑说明: 如果 AutoPilot 认为应该在运行 (current_mode != 'none')，
         # 但检测到 Bot 实际已停止 (is_running == False)，判定为"非预期停止" (如止损触发或手动关闭)。
         # 此时必须触发熔断，禁用 AutoPilot，将控制权交还给用户。
-        if current_mode != 'none' and not is_running:
-            logger.warning(f"[AutoPilot] 熔断触发: 预期处于 {current_mode} 模式但检测到 Bot 已停止")
-            print(f"[AutoPilot] 熔断触发: 预期处于 {current_mode} 模式但检测到 Bot 已停止 (可能触发止损或被手动关闭)")
-            self.state['enabled'] = False
-            self.state['current_mode'] = 'none'
-            self.save_state(self.state)
-            return  # 立即中断，防止死循环重启
+        # [修改] 增加 30秒 启动缓冲期 (Grace Period)
+        # 只有当系统运行超过 30 秒后，才允许触发熔断。防止启动时的初始化延迟导致误判。
+        if time.time() - self.startup_time > 30:
+            if current_mode != 'none' and not is_running:
+                logger.warning(f"[AutoPilot] 熔断触发: 预期处于 {current_mode} 模式但检测到 Bot 已停止")
+                print(f"[AutoPilot] 熔断触发: 预期处于 {current_mode} 模式但检测到 Bot 已停止 (可能触发止损或被手动关闭)")
+                self.state['enabled'] = False
+                self.state['current_mode'] = 'none'
+                self.save_state(self.state)
+                return  # 立即中断，防止死循环重启
+        
 
         # 阈值读取
         long_open = triggers.get('long_open', -0.46)
