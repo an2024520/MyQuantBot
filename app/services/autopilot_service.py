@@ -310,7 +310,7 @@ class AutoPilotService:
                 "lower_buffer_pct": 0.03,
                 "leverage": 5,
                 "amount": 0.001,
-                "grid_num": 40
+                "grid_num": 40,
                 "active_order_limit": 5
             },
             "template_short": {
@@ -318,7 +318,7 @@ class AutoPilotService:
                 "lower_buffer_pct": 0.07,
                 "leverage": 5,
                 "amount": 0.001,
-                "grid_num": 40
+                "grid_num": 40,
                 "active_order_limit": 5
             }
         }
