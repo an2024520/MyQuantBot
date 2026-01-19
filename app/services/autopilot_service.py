@@ -279,6 +279,8 @@ class AutoPilotService:
             'amount': template.get('amount', 0.001),
             'grid_num': template.get('grid_num', 40),
             'strategy_type': mode,
+            # ✅ [补丁] 修复挂单窗口参数传递
+            'active_order_limit': template.get('active_order_limit', 5),
         }
         
         return bot_config
@@ -309,6 +311,7 @@ class AutoPilotService:
                 "leverage": 5,
                 "amount": 0.001,
                 "grid_num": 40
+                "active_order_limit": 5
             },
             "template_short": {
                 "upper_buffer_pct": 0.03,
@@ -316,6 +319,7 @@ class AutoPilotService:
                 "leverage": 5,
                 "amount": 0.001,
                 "grid_num": 40
+                "active_order_limit": 5
             }
         }
 
