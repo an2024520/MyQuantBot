@@ -131,57 +131,92 @@ class AutoPilotService:
                 logger.error(traceback.format_exc())
                 time.sleep(5)
 
+    def _ensure_strategy(self, target_mode, current_price, BotManager):
+        """
+        智能执行器: 确保当前运行状态符合目标模式 (统一信号流核心)
+        """
+        bot = BotManager.get_bot()
+        current_running_mode = self.state.get('current_mode', 'none')
+        
+        # 判断是否需要动作:
+        # 1. 并没有在跑 (None) -> 需要启动
+        # 2. 在跑但模式不对 (比如 Target=Long, Current=Short/Manual) -> 需要纠偏
+        
+        is_running = bot is not None and bot.running
+        
+        if not is_running or current_running_mode != target_mode:
+            logger.info(f"[AutoPilot] 状态纠偏触发: 当前({current_running_mode}) -> 目标({target_mode})")
+            print(f"[AutoPilot] 状态纠偏触发: {current_running_mode} -> {target_mode}")
+            
+            # 1. 防御性清场 (安全操作: 即使空仓调用也没副作用)
+            # 这会停止旧的手动Bot或反向Bot，并平掉旧仓位
+            self._close_position(BotManager)
+            
+            # 2. 启动新目标
+            # 等待 stop() 完成后 (thread.join 保证了时序安全)，开启新方向
+            self._open_position(target_mode, current_price, BotManager)
+            
+        else:
+            # 状态正确，保持持仓
+            pass
+
     def _process_signal(self, smi_value, current_price, triggers):
-        """信号处理核心逻辑 (The Brain)"""
+        """信号处理核心逻辑 (统一信号流 + 熔断保护)"""
         # 延迟导入避免循环依赖
         from app.services.bot_manager import BotManager
         
         bot = BotManager.get_bot()
-        bot_running = bot is not None and bot.running
+        is_running = bot is not None and bot.running
         current_mode = self.state.get('current_mode', 'none')
         
-        # ============ Scenario A: Bot 已停止 ============
-        if not bot_running:
-            # Circuit Breaker: 检测外部停止
-            # 逻辑说明: 如果 AutoPilot 认为应该在运行 (current_mode != 'none')，
-            # 但检测到 Bot 实际已停止 (bot_running == False)，判定为"非预期停止" (如止损触发或手动关闭)。
-            # 此时必须触发熔断，禁用 AutoPilot，将控制权交还给用户。
-            if current_mode != 'none':
-                logger.warning(f"[AutoPilot] 熔断触发: 预期处于 {current_mode} 模式但检测到 Bot 已停止 (可能触发止损或被手动关闭)")
-                print(f"[AutoPilot] 熔断触发: 预期处于 {current_mode} 模式但检测到 Bot 已停止 (可能触发止损或被手动关闭)")
-                self.state['enabled'] = False
-                self.state['current_mode'] = 'none'
-                self.save_state(self.state)
-                return
-            
-            # 信号检查: 开仓条件
-            long_open = triggers.get('long_open', -0.46)
-            short_open = triggers.get('short_open', 0.46)
-            
-            if smi_value < long_open:
-                logger.info(f"[AutoPilot] 触发开多信号: SMI={smi_value:.4f} < {long_open}")
-                print(f"[AutoPilot] 触发开多信号: SMI={smi_value:.4f} < {long_open}")
-                self._open_position('long', current_price, BotManager)
-                
-            elif smi_value > short_open:
-                logger.info(f"[AutoPilot] 触发开空信号: SMI={smi_value:.4f} > {short_open}")
-                print(f"[AutoPilot] 触发开空信号: SMI={smi_value:.4f} > {short_open}")
-                self._open_position('short', current_price, BotManager)
+        # ============ 1. [复活] 熔断机制 (Circuit Breaker) ============
+        # 逻辑说明: 如果 AutoPilot 认为应该在运行 (current_mode != 'none')，
+        # 但检测到 Bot 实际已停止 (is_running == False)，判定为"非预期停止" (如止损触发或手动关闭)。
+        # 此时必须触发熔断，禁用 AutoPilot，将控制权交还给用户。
+        if current_mode != 'none' and not is_running:
+            logger.warning(f"[AutoPilot] 熔断触发: 预期处于 {current_mode} 模式但检测到 Bot 已停止")
+            print(f"[AutoPilot] 熔断触发: 预期处于 {current_mode} 模式但检测到 Bot 已停止 (可能触发止损或被手动关闭)")
+            self.state['enabled'] = False
+            self.state['current_mode'] = 'none'
+            self.save_state(self.state)
+            return  # 立即中断，防止死循环重启
+
+        # 阈值读取
+        long_open = triggers.get('long_open', -0.46)
+        short_open = triggers.get('short_open', 0.46)
+        long_close = triggers.get('long_close', 0.40)
+        short_close = triggers.get('short_close', -0.40)
         
-        # ============ Scenario B: Bot 运行中 ============
-        else:
-            long_close = triggers.get('long_close', 0.40)
-            short_close = triggers.get('short_close', -0.40)
-            
-            if current_mode == 'long' and smi_value > long_close:
-                logger.info(f"[AutoPilot] 触发平多信号: SMI={smi_value:.4f} > {long_close}")
-                print(f"[AutoPilot] 触发平多信号: SMI={smi_value:.4f} > {long_close}")
-                self._close_position(BotManager)
-                
-            elif current_mode == 'short' and smi_value < short_close:
-                logger.info(f"[AutoPilot] 触发平空信号: SMI={smi_value:.4f} < {short_close}")
-                print(f"[AutoPilot] 触发平空信号: SMI={smi_value:.4f} < {short_close}")
-                self._close_position(BotManager)
+        # ============ 2. 优先检查反转/开仓信号 (强力接管) ============
+        # 逻辑: 只要出现极端信号，无视当前状态(含手动Bot)，强制纠偏到目标状态
+        
+        if smi_value < long_open:
+            # 强力开多 (含: 空转多、手动转多、空仓开多)
+            self._ensure_strategy('long', current_price, BotManager)
+            return
+
+        elif smi_value > short_open:
+            # 强力开空 (含: 多转空、手动转空、空仓开空)
+            self._ensure_strategy('short', current_price, BotManager)
+            return
+        
+        # ============ 3. 检查平仓信号 (止盈/防守) ============
+        # 逻辑: 只有当明确持有自动单时，才执行平仓 (避免误平手动单的非极端波动)
+        
+        if current_mode == 'short' and smi_value < short_close:
+            logger.info(f"[AutoPilot] 触发平空止盈: {smi_value:.4f} < {short_close}")
+            print(f"[AutoPilot] 触发平空止盈: {smi_value:.4f} < {short_close}")
+            self._close_position(BotManager)
+            # 显式重置状态，防止下一轮循环误判
+            self.state['current_mode'] = 'none'
+            self.save_state(self.state)
+
+        elif current_mode == 'long' and smi_value > long_close:
+            logger.info(f"[AutoPilot] 触发平多止盈: {smi_value:.4f} > {long_close}")
+            print(f"[AutoPilot] 触发平多止盈: {smi_value:.4f} > {long_close}")
+            self._close_position(BotManager)
+            self.state['current_mode'] = 'none'
+            self.save_state(self.state)
 
     def _open_position(self, mode, current_price, BotManager):
         """开仓操作"""
