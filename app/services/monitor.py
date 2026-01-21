@@ -260,7 +260,8 @@ def market_monitor_thread():
                 # print(f"[Sentinel Error] {e}") 
                 pass
 
-            time.sleep(2)
+            # [修改] 流量优化:原值是 2,可以根据情况修改
+            time.sleep(3)
             
         except Exception as e:
             print(f"[Monitor Error] {e}")

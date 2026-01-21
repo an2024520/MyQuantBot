@@ -137,7 +137,9 @@ class FutureGridBot(FutureGridInitMixin, FutureGridCalcMixin, FutureGridRiskMixi
             except Exception as e:
                 self.log(f"[主循环异常] {e}")
 
-            time.sleep(1)
+            # [修改] 流量优化: 将轮询间隔从 1s 增加到 2s
+            # 预计可节省 50% 的 API 出站流量 (200MB/day -> 100MB/day)
+            time.sleep(2)
 
     def _initialize_and_run(self):
         self.log("[系统] 正在后台初始化交易所、账户和网格...")
