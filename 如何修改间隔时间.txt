@@ -1,0 +1,29 @@
+主页：
+前端
+文件: app/templates/dashboard.html
+setInterval(() => { fetch('/api/market_status').then(r => r.json()).then(data => { renderMarket(data); }); }, 4000); // <--- 这里控制主页刷新频率
+后端：
+文件: app/strategies/future_grid_strategy.py
+# [修改] 流量优化: 将轮询间隔从 1s 增加到 2s # 预计可节省 50% 的 API 出站流量 (200MB/day -> 100MB/day) time.sleep(2) # <--- 这里控制机器人下单/检测频率
+
+
+Bot：
+前端：
+app/templates/future_grid_bot.html
+最后一行
+setInterval(() => {
+    fetch('/api/future/status').then(r => r.json()).then(d => { 
+        // ... (保持中间逻辑不变) ...
+    });
+}, 2500);  // <--- 这里修改刷新间隔逻辑
+
+后端：
+文件:app/services/monitor.py
+time.sleep(3)
+
+
+
+修改后重启：
+systemctl restart myquant
+
+
