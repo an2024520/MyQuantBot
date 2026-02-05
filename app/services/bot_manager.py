@@ -80,8 +80,8 @@ class BotManager:
             updated_keys.append('挂单数')
             
         # 扩展：支持格数、区间、金额等核心参数更新
-        if 'grid_count' in updates and updates['grid_count']:
-            cls._future_bot.config['grid_count'] = int(updates['grid_count'])
+        if 'grid_num' in updates and updates['grid_num']:
+            cls._future_bot.config['grid_num'] = int(updates['grid_num'])
             updated_keys.append('格数')
 
         if 'upper_price' in updates and updates['upper_price']:
