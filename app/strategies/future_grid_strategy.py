@@ -78,6 +78,20 @@ class FutureGridBot(FutureGridInitMixin, FutureGridCalcMixin, FutureGridRiskMixi
             return
 
         if self.check_risk_management(): return
+
+        # === Out-of-Bounds Circuit Breaker ===
+        lower = float(self.config.get('lower_price', 0))
+        upper = float(self.config.get('upper_price', float('inf')))
+        
+        if current_price < lower or current_price > upper:
+            # Only log if status note changed to avoid spamming
+            if "out of bounds" not in self.status_data.get('note', ''):
+                self.log(f"📉 Price out of bounds ({lower}-{upper}), strategy frozen.")
+            
+            self.status_data['note'] = f"Price {current_price} out of bounds ({lower}-{upper})"
+            self.last_sync_time = time.time() # Reset sync timer to prevent backlog
+            return
+        # =====================================
         
         # [修改] Phase 4 逻辑接管
         # 1. 优先执行订单状态检查 (推窗逻辑)

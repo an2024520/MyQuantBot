@@ -75,6 +75,19 @@ class FutureGridOrderMixin:
         确保在 Long 模式下空档定在上方，Short 模式下空档定在下方。
         """
         self.log(f"⚡ 正在计算初始网格模型 (Strategy Aware)...")
+
+        # === Out-of-Bounds Check ===
+        lower = float(self.config.get('lower_price', 0))
+        upper = float(self.config.get('upper_price', float('inf')))
+        
+        if current_price < lower or current_price > upper:
+            self.log(f"⚠️ [Init Skipped] Price {current_price} is out of bounds ({lower}-{upper}).")
+            self.status_data['note'] = "Init skipped (Out of bounds)"
+            # Try to restore display from memory if possible
+            self.update_orders_display_from_memory()
+            return
+        # ===========================
+
         self._cancel_all_orders()
         
         # 1. 计算基础网格索引 (复用旧逻辑)
