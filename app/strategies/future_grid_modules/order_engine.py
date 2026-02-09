@@ -69,6 +69,18 @@ class FutureGridOrderMixin:
                     self.log(f"⚠️ 撤单失败: {e}")
 
     def initialize_grid_orders(self, current_price):
+    """
+    [新增] 启动/纠偏时的静态挂单墙生成
+    注意：此处直接复用了旧逻辑(manage_maker_orders)中的 Offset 策略来确定空档(Gap)，
+    确保在 Long 模式下空档定在上方，Short 模式下空档定在下方。
+    """
+    # Out-of-Bounds Circuit Breaker
+    if current_price < self.config.get('lower_price') or current_price > self.config.get('upper_price'):
+        self.log(f"📉 Price out of bounds (Lower: {self.config.get('lower_price')}, Upper: {self.config.get('upper_price')}), freezing strategy.")
+        self.status_data['note'] = "Price out of bounds, strategy frozen."
+        return
+    self.log(f"⚡ 正在计算初始网格模型 (Strategy Aware)...")
+    self._cancel_all_orders()
         """
         [新增] 启动/纠偏时的静态挂单墙生成
         注意：此处直接复用了旧逻辑(manage_maker_orders)中的 Offset 策略来确定空档(Gap)，
