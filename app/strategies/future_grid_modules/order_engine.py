@@ -132,11 +132,13 @@ class FutureGridOrderMixin:
         # 下方挂买 (Gap - N*Step)
         for i in range(1, active_limit + 1):
             p = self.gap_price - (i * self.grid_step)
+            if p > current_price: continue
             self._place_order_safe('buy', p)
             
         # 上方挂卖 (Gap + N*Step)
         for i in range(1, active_limit + 1):
             p = self.gap_price + (i * self.grid_step)
+            if p < current_price: continue
             self._place_order_safe('sell', p)
             
         self.update_orders_display_from_memory()

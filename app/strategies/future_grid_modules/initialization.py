@@ -104,7 +104,7 @@ class FutureGridInitMixin:
             
             # [核心修改] Plan A: 强制对齐步长，消除理论与实际的偏差
             # 这保证了 self.grids 中的价格与 _place_order_safe 发出的价格完全一致
-            self.grids = [round(p / step) * step for p in raw_grids]
+            self.grids = [int(p / step + 0.5) * step for p in raw_grids]
             
             # 2. 末端去噪 (去除浮点数尾数，如 90200.0000001 -> 90200.0)
             digits = 2 if lower > 100 else (4 if lower > 1 else 6)
